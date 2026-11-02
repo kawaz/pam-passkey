@@ -3,7 +3,7 @@ title: sudo 内 helper から呼び出しユーザの login keychain を読め�
 status: open
 category: task
 created: 2026-11-02T22:18:47+09:00
-last_read:
+last_read: 2026-11-02T22:57:58+09:00
 open_entered: 2026-11-02T22:18:47+09:00
 wip_entered:
 blocked_entered:
