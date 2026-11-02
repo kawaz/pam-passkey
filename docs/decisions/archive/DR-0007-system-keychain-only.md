@@ -1,6 +1,6 @@
 # DR-0007: 状態と設定は System Keychain 一本に置き、ファイルを持たない
 
-- Status: Accepted
+- Status: Superseded by DR-0011
 - Date: 2026-11-02
 
 ## Context
@@ -23,7 +23,7 @@
 | root 所有の設定ファイル | root 所有ファイルの管理責務を持つことになる。配布形態 (自前 build / brew / nix) ごとに setup 手順が分かれる |
 | login keychain | ユーザ権限で書き込めるので、ユーザ権限のプロセスが鍵を登録して自分の sudo を承認できる (権限昇格) |
 | 特権 helper (SMAppService) を立てて書き込みを仲介する | 導入が重い |
-| ユーザ権限から Authorization right (`system.keychain.modify`) を取って書く | right を取得しても `-61` (wrPermErr) で書けないことを実機で確認した ([findings](../findings/2026-11-02-keychain-poc.md)) |
+| ユーザ権限から Authorization right (`system.keychain.modify`) を取って書く | right を取得しても `-61` (wrPermErr) で書けないことを実機で確認した ([findings](../../findings/2026-11-02-keychain-poc.md)) |
 
 ## Consequences
 
@@ -34,6 +34,6 @@
 
 ## 関連
 
-- [DR-0005](./DR-0005-s3-compatible-store.md)
-- [DR-0010](./DR-0010-cli-shape.md)
-- [findings: System Keychain の PoC](../findings/2026-11-02-keychain-poc.md)
+- [DR-0005](../DR-0005-s3-compatible-store.md)
+- [DR-0010](../DR-0010-cli-shape.md)
+- [findings: System Keychain の PoC](../../findings/2026-11-02-keychain-poc.md)

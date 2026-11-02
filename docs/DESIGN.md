@@ -15,7 +15,7 @@ In macOS sudo authentication (the same PAM layer as `pam_tid`), accept both Touc
 ### What not to add
 
 - Resident servers, listening ports, self-hosted HTTPS servers (no code to deploy and maintain, neither on the Mac nor on the relay side)
-- Files, directories or permissions on the Mac (state and settings live only in the System Keychain)
+- Files, directories or permissions on the Mac (state and settings live only in the Keychain)
 - Logic inside the sudo process (the PAM module stays a thin layer that launches the helper)
 
 ### Out of scope
@@ -91,22 +91,28 @@ Page:          fetch the URL in the fragment → decrypt and show → poll resul
 
 ### Enrollment
 
-Enrollment is a one-time out-of-band procedure. `pam-passkey add` opens the enrollment page; the public key + credential id + binding to the challenge produced on the page are pasted into the CLI via the clipboard (Universal Clipboard), and the CLI verifies them and stores them in the System Keychain. The store is not involved.
+Enrollment is a one-time out-of-band procedure. `pam-passkey add` opens the enrollment page; the public key + credential id + binding to the challenge produced on the page are pasted into the CLI via the clipboard (Universal Clipboard), and the CLI verifies them, signs them and stores them in the user's login keychain. The store is not involved.
 
-## State and settings: System Keychain only
+## State and settings: Keychain only
 
-No files, directories or permissions at all. All state lives in generic password items of the System Keychain (`/Library/Keychains/System.keychain`).
+No files, directories or permissions at all. Settings and the signing key live in generic password items of the System Keychain (`/Library/Keychains/System.keychain`); passkeys live in generic password items of the user's login keychain.
 
-- Writing requires root (`sudo pam-passkey setup` / `add` / `del`). User-level processes cannot write even after acquiring an Authorization right ([findings](./findings/2026-11-02-keychain-poc.md)). sudo is needed only for configuration changes; authentication (reading) does not depend on it
-- The path where a user-level process enrolls its own key to approve its own sudo is closed by requiring root to write to the System Keychain. Nothing is written to the login keychain (fixed in the implementation)
-- Readers are PAM (inside the sudo process, root) and the helper. Public keys and settings are not secret, so their ACL is "all applications" (avoiding the ACL issue caused by the main executable being `/usr/bin/sudo`). Only the secret (the store credentials) has its ACL narrowed to the Developer ID-signed helper. An ad-hoc signature changes on every build and drops off the ACL, so Developer ID signing is a prerequisite
+- Root (`sudo pam-passkey setup`) is needed only once, for `setup`, which writes to the System Keychain. `add` / `del` / `list` run with user privileges. User-level processes cannot write to the System Keychain even after acquiring an Authorization right ([findings](./findings/2026-11-02-keychain-poc.md))
+- `setup` generates the signing key (a JWK private key) and stores it in the System Keychain, with an ACL limited to the Developer ID-signed helper
+- For `add`, the helper requests Touch ID via `LAContext` (policy `deviceOwnerAuthentication`; password on Macs without Touch ID) and only issues the enrollment URL after it succeeds. Once the pasted result is verified, the same process signs it into a JWS with the signing key (the payload includes the OS user name) and stores it in the login keychain
+- `del` just deletes from the login keychain
+- At authentication time the helper reads the items from a child process dropped to the invoking user (the login keychain is unlocked in the user's session, so it is read as the user). signCount is a mutable field outside the signature
+- PAM / the helper read the login keychain item and verify each JWS with the signing key's public key. Entries that fail verification, or whose payload OS user name does not match the user being authenticated, are ignored as invalid
+- The path where a user-level process enrolls its own key to approve its own sudo is closed by the signature. A malicious process can run the helper but cannot get through the Touch ID dialog, and signing happens inside the same process that passed Touch ID (hardened runtime + Developer ID signature), so a process with the same uid can neither tamper with its control flow nor peek at the signing key. Replacing the login keychain file is invalidated by signature verification. A malicious process can also `del`, but that only removes remote approval and falls back to the password; it is not an escalation
+- Public keys and settings are not secret, so their ACL is "all applications" (avoiding the ACL issue caused by the main executable being `/usr/bin/sudo`). Only secrets (the signing key, the store credentials) have their ACL narrowed to the Developer ID-signed helper. An ad-hoc signature changes on every build and drops off the ACL, so Developer ID signing is a prerequisite
 
-| Item | Content |
-|---|---|
-| `page_url` | URL of the approval / enrollment pages (GitHub Pages by default). `rp_id` is derived from it. Self-hosters fork and change this |
-| `store` | S3-compatible connection JSON (endpoint / bucket / region / prefix / access key / secret). Contains secrets |
-| `send_command` | Command that reads the approval URL from stdin. Empty means print to the tty |
-| `users/<os user>` | JSONL of that user's passkeys (credential id, public key, label, enrollment date, signCount). One item per user |
+| Location | Item | Content |
+|---|---|---|
+| System Keychain | `page_url` | URL of the approval / enrollment pages (GitHub Pages by default). `rp_id` is derived from it. Self-hosters fork and change this |
+| System Keychain | `store` | S3-compatible connection JSON (endpoint / bucket / region / prefix / access key / secret). Contains secrets |
+| System Keychain | `send_command` | Command that reads the approval URL from stdin. Empty means print to the tty |
+| System Keychain | Signing key | Key that signs passkey entries (a JWK private key). Secret |
+| login keychain | `users/<os user>` | JSONL of that user's passkeys. Each line is a JWS whose payload holds the OS user name, credential id, public key, label, enrollment date and signCount. One item per user |
 
 Everything else (polling interval, button labels, whether Touch ID is used) is a code default.
 
@@ -115,9 +121,9 @@ Everything else (polling interval, button labels, whether Touch ID is used) is a
 | Subcommand | Purpose |
 |---|---|
 | `setup <page_url>` | Initial setup (root) |
-| `add [label]` | Enroll a passkey (root) |
-| `list` | List your own passkeys (just reads your own `users/<os user>` item) |
-| `del <label\|id>` | Delete a passkey (root) |
+| `add [label]` | Enroll a passkey (asks for Touch ID) |
+| `list` | List your own passkeys (just reads the login keychain) |
+| `del <label\|id>` | Delete a passkey |
 | `test` | Run the approval path end to end without sudo |
 | `doctor` | Diagnose the environment |
 
@@ -148,10 +154,10 @@ env is not shown because it may contain secrets. sudo runs as root, so `KERN_PRO
 - [DR-0004](./decisions/DR-0004-fallback-button-as-details.md) — "Show details" reuses the LAContext fallback button
 - [DR-0005](./decisions/DR-0005-s3-compatible-store.md) — The relay is an S3-compatible store with presigned URLs
 - [DR-0006](./decisions/DR-0006-approval-url-and-exchange.md) — One approval URL, encrypted details, a three-valued result
-- [DR-0007](./decisions/DR-0007-system-keychain-only.md) — State and settings live only in the System Keychain
 - [DR-0008](./decisions/DR-0008-pluggable-send-command.md) — Notification is pluggable via `send_command`
 - [DR-0009](./decisions/DR-0009-foreground-control.md) — Foreground control is limited to activating the browser on `open`
 - [DR-0010](./decisions/DR-0010-cli-shape.md) — One CLI binary with verb-only subcommands
+- [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md) — Passkeys live signed in the login keychain; sudo is needed only for `setup`
 
 ## Related Documents
 

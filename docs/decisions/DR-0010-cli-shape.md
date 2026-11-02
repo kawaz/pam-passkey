@@ -24,10 +24,10 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理・動
 ## Consequences
 
 - PAM モジュールが spawn する対象は `pam-passkey` だけになる
-- `setup` / `add` / `del` は System Keychain への書き込みを伴うので root (`sudo pam-passkey ...`) で実行する ([DR-0007](./DR-0007-system-keychain-only.md))
+- root (`sudo pam-passkey ...`) が要るのは System Keychain に署名鍵と設定を書く `setup` だけ。`add` / `del` / `list` はユーザ権限で動く ([DR-0011](./DR-0011-user-keychain-signed-records.md))
 
 ## 関連
 
 - [DR-0001](./DR-0001-naming.md)
 - [DR-0003](./DR-0003-helper-outside-sudo.md)
-- [DR-0007](./DR-0007-system-keychain-only.md)
+- [DR-0011](./DR-0011-user-keychain-signed-records.md)

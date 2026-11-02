@@ -20,7 +20,9 @@ Status は各 DR ファイルの `Status:` 行が正本。
 | [DR-0004](DR-0004-fallback-button-as-details.md) | ⬜ 未実装 | 「詳細を確認」は LAContext の fallback ボタンを転用し、`LAErrorUserFallback` で拾う |
 | [DR-0005](DR-0005-s3-compatible-store.md) | ⬜ 未実装 | 中継は S3 互換ストアと presigned URL。デプロイするコードを持たない |
 | [DR-0006](DR-0006-approval-url-and-exchange.md) | ⬜ 未実装 | 承認 URL は `page_url#<presigned GET>.<復号鍵>` の 1 本、詳細は暗号化、result は 404/pass/fail の 3 値 |
-| [DR-0007](DR-0007-system-keychain-only.md) | ⬜ 未実装 | 状態と設定は System Keychain 一本。書き込みは root、読み出しは無ダイアログ |
 | [DR-0008](DR-0008-pluggable-send-command.md) | ⬜ 未実装 | 通知は `send_command` (URL を stdin で受けるコマンド) でプラガブル、既定は tty 表示 |
 | [DR-0009](DR-0009-foreground-control.md) | ⬜ 未実装 | 前面制御は `open` 時のブラウザ activate のみ、承認後に起動元 terminal へ戻さない |
 | [DR-0010](DR-0010-cli-shape.md) | ⬜ 未実装 | CLI は 1 バイナリ、サブコマンドは `setup` / `add` / `list` / `del` / `test` / `doctor` + 内部用 |
+| [DR-0011](DR-0011-user-keychain-signed-records.md) | ⬜ 未実装 | passkey は login keychain に署名付きで置き、sudo 依存は `setup` だけ。設定と署名鍵は System Keychain |
+
+後続の DR に置き換えられた DR は [archive/INDEX.md](archive/INDEX.md)。

@@ -28,4 +28,4 @@
 ## 関連
 
 - [DR-0006](./DR-0006-approval-url-and-exchange.md)
-- [DR-0007](./DR-0007-system-keychain-only.md)
+- [DR-0011](./DR-0011-user-keychain-signed-records.md)

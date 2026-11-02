@@ -15,7 +15,7 @@ macOS の sudo 認証 (`pam_tid` と同じ PAM の層) で、手元の Touch ID 
 ### 増やさないもの
 
 - 常駐サーバ・受信ポート・自前の HTTPS サーバ (Mac 側にも中継側にも、デプロイして維持するコードを置かない)
-- Mac 上のファイル・ディレクトリ・パーミッション (状態と設定は System Keychain だけに置く)
+- Mac 上のファイル・ディレクトリ・パーミッション (状態と設定は Keychain だけに置く)
 - sudo プロセス内のロジック (PAM モジュールは helper を起動する薄い層に留める)
 
 ### 扱わないもの
@@ -91,22 +91,28 @@ request JSON:  details (host / user / tty / argv / プロセスツリー)、chal
 
 ### 登録
 
-登録は 1 回の帯域外手続き。`pam-passkey add` が登録ページを開き、ページで作った公開鍵 + credential id + challenge への束縛をクリップボード経由 (ユニバーサルクリップボード) で CLI に貼り、CLI が検証して System Keychain に保存する。ストアを通さない。
+登録は 1 回の帯域外手続き。`pam-passkey add` が登録ページを開き、ページで作った公開鍵 + credential id + challenge への束縛をクリップボード経由 (ユニバーサルクリップボード) で CLI に貼り、CLI が検証し、署名を付けてユーザの login keychain に保存する。ストアを通さない。
 
-## 状態と設定: System Keychain 一本
+## 状態と設定: Keychain だけに置く
 
-ファイル・ディレクトリ・パーミッションを一切持たない。全状態を System Keychain (`/Library/Keychains/System.keychain`) の generic password 項目に置く。
+ファイル・ディレクトリ・パーミッションを一切持たない。設定と署名鍵は System Keychain (`/Library/Keychains/System.keychain`)、passkey はユーザの login keychain の generic password 項目に置く。
 
-- 書き込みは root が要る (`sudo pam-passkey setup` / `add` / `del`)。ユーザ権限からは Authorization right を取っても書けない ([findings](./findings/2026-11-02-keychain-poc.md))。sudo に依存するのは設定変更時だけで、認証時 (読み出し) は依存しない
-- ユーザ権限のプロセスが勝手に鍵を登録して自分の sudo を承認する経路は、System Keychain への書き込みに root が要ることで塞ぐ。login keychain には書かない (実装で固定する)
-- 読み出しは PAM (sudo プロセス内、root) と helper。公開鍵・設定は秘密でないので ACL は「全アプリ可」にする (main executable が `/usr/bin/sudo` であることによる ACL の問題を踏まない)。秘密 (ストアの鍵) だけ ACL を Developer ID 署名の helper に絞る。ad-hoc 署名は build ごとに変わって ACL が外れるので、Developer ID 署名が前提
+- root (`sudo pam-passkey setup`) が要るのは System Keychain に書く `setup` の 1 回だけ。`add` / `del` / `list` はユーザ権限で動く。ユーザ権限からは Authorization right を取っても System Keychain に書けない ([findings](./findings/2026-11-02-keychain-poc.md))
+- `setup` は署名鍵 (JWK、秘密鍵) を生成して System Keychain に置く。ACL は Developer ID 署名の helper だけ
+- `add` は helper が `LAContext` で Touch ID (policy は `deviceOwnerAuthentication`、非搭載機はパスワード) を要求し、成功してから登録 URL を発行する。貼り付けを検証したら、同じプロセス内で署名鍵で JWS を作り (ペイロードに OS ユーザ名を含める)、login keychain に保存する
+- `del` は login keychain から消すだけ
+- 認証時の読み出しは helper が呼び出しユーザに降格した子プロセスで行う (unlock 済みの login keychain をユーザとして読む)。signCount は署名の外の可変フィールド
+- PAM / helper は login keychain の項目を読み、署名鍵の公開鍵で JWS を検証する。通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
+- ユーザ権限のプロセスが勝手に鍵を登録して自分の sudo を承認する経路は、署名で塞ぐ。悪意あるプロセスは helper を実行できても Touch ID のダイアログを通せず、署名は Touch ID が成功したのと同じプロセス (hardened runtime + Developer ID 署名) の中で行うので、同じ uid からの制御の改変・署名鍵の覗き見もできない。login keychain のファイルを差し替えても署名検証で無効になる。`del` は悪意あるプロセスにもできるが、remote 承認が消えてパスワード認証に落ちるだけで昇格にならない
+- 公開鍵・設定は秘密でないので ACL は「全アプリ可」にする (main executable が `/usr/bin/sudo` であることによる ACL の問題を踏まない)。秘密 (署名鍵、ストアの鍵) だけ ACL を Developer ID 署名の helper に絞る。ad-hoc 署名は build ごとに変わって ACL が外れるので、Developer ID 署名が前提
 
-| 項目 | 中身 |
-|---|---|
-| `page_url` | 承認 / 登録ページの URL (既定は GitHub Pages)。`rp_id` はここから導出する。自分でホスティングする人は fork してここを変える |
-| `store` | S3 互換の接続情報 JSON (endpoint / bucket / region / prefix / access key / secret)。秘密を含む |
-| `send_command` | 承認 URL を stdin で受けるコマンド。空なら tty 表示 |
-| `users/<os user>` | そのユーザの passkey の JSONL (credential id、公開鍵、ラベル、登録日、signCount)。1 ユーザ 1 項目 |
+| 置き場 | 項目 | 中身 |
+|---|---|---|
+| System Keychain | `page_url` | 承認 / 登録ページの URL (既定は GitHub Pages)。`rp_id` はここから導出する。自分でホスティングする人は fork してここを変える |
+| System Keychain | `store` | S3 互換の接続情報 JSON (endpoint / bucket / region / prefix / access key / secret)。秘密を含む |
+| System Keychain | `send_command` | 承認 URL を stdin で受けるコマンド。空なら tty 表示 |
+| System Keychain | 署名鍵 | passkey の項目に署名する鍵 (JWK、秘密鍵)。秘密 |
+| login keychain | `users/<os user>` | そのユーザの passkey の JSONL。各行は JWS で、ペイロードは OS ユーザ名、credential id、公開鍵、ラベル、登録日、signCount。1 ユーザ 1 項目 |
 
 それ以外 (ポーリング間隔、ボタン文言、Touch ID の有無) はコードの既定値。
 
@@ -115,9 +121,9 @@ request JSON:  details (host / user / tty / argv / プロセスツリー)、chal
 | サブコマンド | 用途 |
 |---|---|
 | `setup <page_url>` | 初期設定 (root) |
-| `add [label]` | passkey を登録する (root) |
-| `list` | 自ユーザの passkey を一覧する (自ユーザの `users/<os user>` 項目を読むだけ) |
-| `del <label\|id>` | passkey を削除する (root) |
+| `add [label]` | passkey を登録する (Touch ID を求める) |
+| `list` | 自ユーザの passkey を一覧する (login keychain を読むだけ) |
+| `del <label\|id>` | passkey を削除する |
 | `test` | sudo を介さずに承認経路を一周する |
 | `doctor` | 環境の診断 |
 
@@ -148,10 +154,10 @@ env は秘密が混ざるので出さない。sudo は root なので `KERN_PROC
 - [DR-0004](./decisions/DR-0004-fallback-button-as-details.md) — 「詳細を確認」は LAContext の fallback ボタンを転用
 - [DR-0005](./decisions/DR-0005-s3-compatible-store.md) — 中継は S3 互換ストア + presigned URL
 - [DR-0006](./decisions/DR-0006-approval-url-and-exchange.md) — 承認 URL 1 本、詳細は暗号化、result は 3 値
-- [DR-0007](./decisions/DR-0007-system-keychain-only.md) — 状態と設定は System Keychain 一本
 - [DR-0008](./decisions/DR-0008-pluggable-send-command.md) — 通知は `send_command` でプラガブル
 - [DR-0009](./decisions/DR-0009-foreground-control.md) — 前面制御は `open` 時のブラウザ activate のみ
 - [DR-0010](./decisions/DR-0010-cli-shape.md) — CLI は 1 バイナリ、動詞だけのサブコマンド
+- [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md) — passkey は login keychain に署名付きで置き、sudo 依存は `setup` だけ
 
 ## 関連ドキュメント
 

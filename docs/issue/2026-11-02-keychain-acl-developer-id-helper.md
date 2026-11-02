@@ -1,5 +1,5 @@
 ---
-title: Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0007) の実機検証
+title: Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0011) の実機検証
 status: open
 category: task
 created: 2026-11-02T22:07:30+09:00
@@ -17,11 +17,11 @@ blocked_by:
 origin: 自リポ TODO
 ---
 
-# Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0007) の実機検証
+# Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0011) の実機検証
 
 ## 概要
 
-秘密項目 (store のアクセスキー) の Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0007) は未検証。PoC は全アプリ可の ACL しか確認していない (findings/2026-11-02-keychain-poc.md の未観測)。
+秘密項目 (store のアクセスキー) の Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0011) は未検証。PoC は全アプリ可の ACL しか確認していない (findings/2026-11-02-keychain-poc.md の未観測)。
 
 ## 背景
 

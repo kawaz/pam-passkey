@@ -25,7 +25,7 @@ Mac:    "Show details" → the same approval page opens in the browser
 - Authenticity of an approval rests solely on verifying the passkey signature on the Mac. The relays (store / notification service / CDN) are not trusted
 - No resident server, no listening port, no deployed code. The only relay is an S3-compatible store with presigned URLs
 - Notification is pluggable: any command that reads the approval URL from stdin will do (Bark, ntfy, ssh, ...)
-- All state and settings live in the System Keychain; there are no files. Writing requires root
+- All state and settings live in the Keychain; there are no files. Root is needed only once, for `setup`; adding and removing passkeys runs with user privileges (Touch ID)
 
 ## Documentation
 
