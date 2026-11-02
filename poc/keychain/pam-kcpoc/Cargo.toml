@@ -1,0 +1,12 @@
+[package]
+name = "pam-kcpoc"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+poc-keychain = { path = ".." }
+libc = "0.2"
