@@ -57,7 +57,6 @@
 | 「詳細を確認」(fallback) | ダイアログを閉じる | 走り続け、helper が承認ページを開く ([DR-0004](./DR-0004-fallback-button-as-details.md)) | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR` |
 | 期限切れ | 止める | 止める | `PAM_AUTH_ERR` |
 | remote が使えない (helper の起動失敗 / 登録 0 件 / ストア不達 / login keychain が unlock されていない) | 出す | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
-| ログイン画面 (`PAM_USER` の login keychain が unlock されていない) | 可否による | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
 | Ctrl-C | 止める | 止める | `PAM_AUTH_ERR` (キャンセルと同じ) |
 
 ## 不採用案と理由

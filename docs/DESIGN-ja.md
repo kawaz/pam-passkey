@@ -28,7 +28,7 @@ macOS の PAM auth (主用途は sudo、`pam_tid` と同じ層) で、手元の 
 
 承認の可否を左右し、侵害されると承認を偽れるもの (TCB):
 
-- ページの配信元: GitHub org `pam-passkey` のリポ `pam-passkey.github.io` (GitHub Pages) と、そのリポへの書き込み権。ページの JS は要求詳細を表示し passkey 署名を求める当事者なので、改ざんされると表示する内容と署名させる内容を分けられる。同じ origin を共有させないため、org `pam-passkey` には他の GitHub Pages を置かない
+- ページの配信元: GitHub org `pam-passkey` のリポ `pam-passkey.github.io` (GitHub Pages) と、そのリポへの書き込み権。org `pam-passkey` には他の GitHub Pages を置かない (origin を共有させない)
 - rp_id のドメイン `pam-passkey.github.io`: この origin で動く JS は、登録済みの passkey で assertion を作れる
 - iCloud (passkey の同期先): 同期された端末とそのアカウントは、承認できる主体に含まれる。同期される passkey を受け入れる (iCloud 同期が設計の前提)
 - 通知経路 (`send_command` の先): 利用者が選んだ経路として信頼境界の内側に置く。承認 URL と登録 URL は期限付きの capability で、URL を見た者は期限内にそれを使える ([DR-0008](./decisions/DR-0008-pluggable-send-command.md))
@@ -38,7 +38,7 @@ macOS の PAM auth (主用途は sudo、`pam_tid` と同じ層) で、手元の 
 
 信頼しないもの:
 
-- S3 互換ストア: 要求・assertion・result を中継するだけで、承認の真正性は Mac 側の署名検証で決まる。ストアでの改ざんは fail か待ちにしかならない。要求詳細は暗号化しないので、ストアの運営者からは読める (ストアは利用者自身のバケット)。result はストアで書き換えられるので、ページに出る pass / fail は Mac 側の判定を保証しない
+- S3 互換ストア: 要求・assertion・result を中継するだけで、承認の真正性は Mac 側の署名検証で決まる。ストアでの改ざんは fail か待ちにしかならない。要求詳細は暗号化しない (ストアは利用者自身のバケット)
 
 ## アーキテクチャ
 
