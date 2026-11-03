@@ -13,8 +13,8 @@
 
 | # | 指摘 | sol | opus | 処置 |
 |---|---|---|---|---|
-| 1 | 承認 URL を見る通知経路は期限内に復号できる。「中継は可用性にだけ影響」は機密性で不成立 | C1 | M6 | 信頼の前提を書き直す: 通知経路は信頼境界の内側 (DR-0006 / DR-0008 / DESIGN 目的)。**要求詳細の暗号化と fragment の鍵は外す** (守れる相手がストア運営者 = 自分のバケットだけで、URL が capability なので暗号化は何も足していない。kawaz 2026-11-03)。argv を伏せる選択肢は PK-Q2 |
-| 2 | ページ配信元・rp_id ドメインは TCB。user pages の同一 origin 共有は不可 | C2 | C5 | DESIGN に TCB として明記。専用 origin は PK-Q3。ページは単一ファイル + meta CSP、iframe 拒否は WebAuthn 検証 (`crossOrigin` / `topOrigin`) で |
+| 1 | 承認 URL を見る通知経路は期限内に復号できる。「中継は可用性にだけ影響」は機密性で不成立 | C1 | M6 | 信頼の前提を書き直す: 通知経路は信頼境界の内側 (DR-0006 / DR-0008 / DESIGN 目的)。**要求詳細の暗号化と fragment の鍵は外す** (守れる相手がストア運営者 = 自分のバケットだけで、URL が capability なので暗号化は何も足していない。kawaz 2026-11-03)。隠す要件は無いので argv は全部見せる (PK-Q2 取り下げ、kawaz 2026-11-03) |
+| 2 | ページ配信元・rp_id ドメインは TCB。user pages の同一 origin 共有は不可 | C2 | C5 | DESIGN に TCB として明記。専用 origin は GitHub org `pam-passkey` の `pam-passkey.github.io` (PK-Q3 裁定 a、2026-11-03)。ページは単一ファイル + meta CSP、iframe 拒否は WebAuthn 検証 (`crossOrigin` / `topOrigin`) で |
 | 3 | 表示内容と署名対象が結びついていない。request の `challenge` フィールドをそのまま署名に使うと、同 uid のマルウェアが偽 details + 本物 challenge で署名させられる | C2 (UI integrity) | C1 | **設計変更** (kawaz 2026-11-03): request から `challenge` フィールドを外し、challenge = ページが GET したペイロード全体 (バイト列そのまま) の SHA-256。正規化は不要 (helper は PUT したバイト列を覚えておく)。表示の無害化 (制御文字 / bidi / 切り詰め明示) を仕様化 |
 | 4 | seteuid はプロセス全体に効く。並走する helper spawn と race。PoC は復元失敗を検査しない | C3 | M10 | 順序を固定: プロセス情報収集と helper spawn を済ませてから euid を落とす。復元失敗は `PAM_AUTH_ERR`。`pthread_setugid_np` は代案として実機検証 issue |
 | 5 | root helper から起動する子 (`send_command` / `open`) の永久降格が未規定 | C4 | C4 (spawn 手順) | 仕様化: `setgroups` / `setgid` / `setuid` の順で永久降格、環境は空から許可リストで構築、0/1/2 以外の fd を閉じる、cwd / umask 固定、絶対パス起動 |
@@ -31,13 +31,13 @@
 | # | 指摘 | 出所 | 処置 |
 |---|---|---|---|
 | 13 | `add` の Touch ID がクリップボードの中身に束縛されていない。ペーストボード差し替えで攻撃者の鍵が登録される | opus C2 | **設計変更** (kawaz 2026-11-03): クリップボードを廃止し、登録も承認と同じく登録ページが presigned PUT で返す。登録 URL は capability (tty 表示か `send_command` の stdin にしか出さず、`open` の argv にも載せない) なので第三者は PUT できず、指紋照合は不要 |
-| 14 | 署名済み helper はどの uid からも起動でき、秘密を使う入口が絞られていない (署名オラクル) | opus C3 | 前提は「Keychain の読み書きは helper に限定」。helper 自身の入口の規律を不変条件化: 署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ、内部サブコマンドは秘密を使わない、環境変数で参照先を切り替えられない、`list` は生の JWS を出さない |
+| 14 | 署名済み helper はどの uid からも起動でき、秘密を使う入口が絞られていない (署名オラクル) | opus C3 | 前提は「Keychain の読み書きは helper に限定」。helper 自身の入口の規律を不変条件化: 署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ、内部サブコマンドは秘密を使わない、環境変数で参照先を切り替えられない、`list` は生の JWS を出さない、は撤回 (項目の書き換えは ACL で helper に限定されるので不要。kawaz 2026-11-03) |
 | 15 | helper と `.so` の置き場の所有権。Homebrew 配下はユーザ所有で、差し替えで即 root | opus C4 | DESIGN に「親ディレクトリまで root 所有・他者書き込み不可」を要件化。PAM は spawn 前に owner / mode を検査し、不合格なら remote を諦める。`setup` も検査。brew 配布は対象外と明記 |
-| 16 | sudo の timestamp で承認 1 件が「5 分間 root」になる | opus M1 | 承認画面に明記 (未決事項 3 を「出す」で確定)。`timestamp_timeout=0` の推奨は PK-Q4 |
-| 17 | PAM_USER と呼び出しユーザの一致、service の許可リスト | opus M2 | 不変条件化: `PAM_USER == getuid() のユーザ名` かつ service が許可リスト (初版は sudo のみ)。それ以外は `PAM_IGNORE` |
+| 16 | sudo の timestamp で承認 1 件が「5 分間 root」になる | opus M1 | 承認画面には出さない (PK-Q4 裁定 b、kawaz 2026-11-03)。sudoers は触らない |
+| 17 | PAM_USER と呼び出しユーザの一致、service の許可リスト | opus M2 | モジュールは一般の PAM auth なので許可リストは採らない。不変条件は「認証に使う passkey と生体は PAM_USER のもの」(DR-0012。kawaz 2026-11-03) |
 | 18 | Mac 側「詳細を確認」経路は argv に復号鍵入り URL が載り (`ps` で他ユーザから見える)、ブラウザ履歴にも残りうる | opus M5 | 降格した子で `NSWorkspace` / `LSOpenCFURLRef` 相当を直接呼ぶ (`/usr/bin/open <URL>` を exec しない)。承認後に helper がストアのオブジェクトを DELETE。lifecycle ルールを setup 手順に |
 | 19 | 同期 passkey により iCloud / passkey プロバイダが TCB に入る | opus M8 | 信頼の前提に明記。同期鍵は受け入れる (iCloud 同期が設計の前提)。BE / BS の値は登録時に記録 |
-| 20 | helper を root で動かす理由が無く、攻撃者が書ける assertion を root で解析する | opus M11 | root が要る処理を列挙して DR-0003 に書く。ネットワークと解析は降格した子で行い root 側は結果だけ受ける構成を DR-0003 に追記 |
+| 20 | helper を root で動かす理由が無く、攻撃者が書ける assertion を root で解析する | opus M11 | 検証は root の helper 自身が行い、降格した子は PAM_USER の権限が要る処理 (login keychain 読み出し / send_command / open) だけ (子が乗っ取られても偽の pass を返せるので分離しても安全性が変わらず、IPC が増えるだけ。kawaz 2026-11-03)。DR-0003 の不採用案に記載 |
 | 21 | 拒否 / junk / 検証失敗 / ストア障害 / timeout を Mac 側では区別し、上書き競合の確定規則を決める | sol m11 | DR-0006 に「assertion を 1 つ受け取った時点で判定を確定 (junk なら fail)。以後の上書きは見ない」を追記 |
 | 22 | Minor 群: findings の古い示唆、fragment の区切り (`.` は URL に含まれる)、公開鍵の置き場 (JWS か HMAC か)、Touch ID 本文の切り詰め、result の偽装可能性、GET サイズ上限、CORS、複数ユーザ、承認疲れ、Apple Watch、`test` の権限差、Ctrl-C | opus Minor | 文書修正で反映。暗号化を外すので fragment は presigned GET URL だけ。CORS と lifecycle を setup に。`test` / `doctor` は削除 (kawaz 2026-11-03。疎通確認は `setup` に寄せる)。レート制限は未決として残す |
 
