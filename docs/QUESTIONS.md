@@ -21,10 +21,10 @@
 ### 👺PK-Q1: passkey の置き場。DR-0011 (login keychain + 署名) を維持するか、DR-0007 方式 (全状態 System Keychain、`add` / `del` は sudo) に戻すか
 
 - [ ] a (推奨): DR-0007 方式に戻す。全状態を root が書く System Keychain に置き、`add` / `del` は `sudo pam-passkey add`
-- [ ] b: DR-0011 維持 + `add` の Touch ID を貼り付け検証後・署名直前に移して credential 指紋を照合 + 失効用の世代番号を System Keychain に持つ (失効には結局 root が要る)
-- [ ] c: Secure Enclave + biometry ACL の鍵で署名 (C3 は塞がるが C2 は残り、公開鍵登録に root が要る)
+- [ ] b: DR-0011 維持 + 失効用の世代番号を System Keychain に持つ (失効には結局 root が要る)
+- [ ] c: Secure Enclave + biometry ACL の鍵で署名 (署名オラクルは塞がるが、公開鍵登録に root が要る)
 
-推奨理由: DR-0011 の「安全性は同等」は成立しない ([disposition](./research/2026-11-02-design-review-disposition.md) #9 / #13 / #14)。(1) `del` では失効できない (署名済み行を写した同 uid のプロセスが書き戻せる)、(2) ユーザ権限で起動できる署名オラクルが生まれ、クリップボード差し替えで攻撃者の鍵を登録できる、(3) Developer ID 署名の ACL への依存 (旧版バイナリも通る、nix / 自前 build と両立しない) が設計の芯に入る。一方 DR-0011 が得るものは「`add` でパスワードを打たない」利便性だけで、ハシゴ外しの根拠は弱い (モジュールが壊れても失敗はパスワードに流れるので `sudo pam-passkey add` は動く)。(a) なら #9 / #13 / #14 と ACL issue が丸ごと消え、helper が root で読む秘密は「root だけが読める置き場」で守れて Developer ID 依存を外せる。
+推奨理由: DR-0011 の「安全性は同等」は成立しない ([disposition](./research/2026-11-02-design-review-disposition.md) #9 / #14)。(1) `del` では失効できない (署名済み行を写した同 uid のプロセスが書き戻せる)、(2) ユーザ権限で起動できる署名オラクル (署名済み helper はどの uid からも起動でき、Touch ID 後の署名経路の実装の揺らぎがそのまま昇格経路になる) が生まれる。一方 DR-0011 が得るものは「`add` でパスワードを打たない」利便性だけで、ハシゴ外しの根拠は弱い (モジュールが壊れても失敗はパスワードに流れるので `sudo pam-passkey add` は動く)。(a) なら #9 / #14 と login keychain の検証 issue が消える。Developer ID 署名はストアの秘密の ACL のために a / b どちらでも前提として残る。
 
 ### 👺PK-Q2: 通知経路に見せる要求詳細の既定
 
