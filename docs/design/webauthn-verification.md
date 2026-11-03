@@ -32,6 +32,7 @@
 | `clientDataJSON.challenge` | `add` が PUT した登録ペイロードのバイト列全体の SHA-256 と一致する (承認と同じ形) |
 | `clientDataJSON.origin` | `page_url` の origin と scheme / host / port まで完全一致する |
 | `clientDataJSON.crossOrigin` | `false` または不在 |
+| `clientDataJSON.topOrigin` | 不在 |
 | `authenticatorData.rpIdHash` | `SHA-256(rp_id)` と一致する |
 | `authenticatorData` の flags | UP、UV、AT (attested credential data あり) が立っている |
 | 公開鍵の COSE alg | ES256 (`-7`) だけを受け入れる |
