@@ -21,11 +21,6 @@
 ### 👺PK-Q4: 承認画面に「以降は sudo の timestamp の間 (既定 5 分) 無認証」と出すか (DESIGN 未決事項 3)
 
 - [ ] a (推奨): 出す
-- [ ] b: 出さない
+- [x] b: 出さない
 
 ## 確認待ち
-
-### 👺PK-C1: 稼働中の `/etc/pam.d/sudo_local` に PoC の 2 行 (`pam_kcpoc.so`、`pam_poc.so`) が残っている。`pam_poc.so` は Touch ID 成功で `PAM_SUCCESS` を返すので本番の sudo 認証に入ったまま
-
-- [ ] a: 意図どおり (本実装まで PoC を使う)
-- [ ] b: 2 行とも外す (root シェルを確保した上で統括が外す)
