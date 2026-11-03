@@ -5,14 +5,14 @@
 
 ## Context
 
-PAM モジュールから呼ばれる helper と、設定・passkey 管理・動作確認の機能が要る。helper のロジックは sudo プロセス外の CLI 側に置く ([DR-0003](./DR-0003-helper-outside-sudo.md))。
+PAM モジュールから呼ばれる helper と、設定・passkey 管理の機能が要る。helper のロジックは sudo プロセス外の CLI 側に置く ([DR-0003](./DR-0003-helper-outside-sudo.md))。
 
 ## Decision
 
 - helper と管理機能を `pam-passkey` の 1 バイナリにまとめる
-- サブコマンドは `setup <page_url>` / `add [label]` / `list` / `del <label|id>` / `test` / `doctor` と、PAM から呼ばれる内部用サブコマンド
+- サブコマンドは `setup <page_url>` / `add [label]` / `list` / `del <label|id>` と、PAM から呼ばれる内部用サブコマンド
 - passkey の操作は `ssh-add` / `useradd` の感触で動詞だけにする (操作対象はツール名から自明)
-- `test` は sudo を介さずに承認経路を一周する
+- 疎通確認 (ストアへの到達、バケットの CORS、`.so` と helper の置き場の所有権) は `setup` が行う
 
 ## 不採用案と理由
 

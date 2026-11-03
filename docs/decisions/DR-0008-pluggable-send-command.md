@@ -5,13 +5,14 @@
 
 ## Context
 
-承認 URL を受け手 (iPhone / Mac) に届ける手段は人によって違う (Bark、bark-admin、ntfy、ssh、チャット等)。
+承認 URL と登録 URL を受け手 (iPhone / Mac) に届ける手段は人によって違う (Bark、bark-admin、ntfy、ssh、チャット等)。
 
 ## Decision
 
-- モジュールと helper は「URL を 1 本届ける」ことしか知らない。届け方は `send_command` (承認 URL を stdin で受けるコマンド) の中身に任せる。`send_command` は System Keychain の項目として設定する
-- `send_command` が未設定なら承認 URL を tty に表示する。terminal のリンククリックか、コピペ (ユニバーサルクリップボードで iPhone へ) で足りる
-- `send_command` の子プロセスはユーザ権限で動かす
+- モジュールと helper は「URL を 1 本届ける」ことしか知らない。届け方は `send_command` (URL を stdin で受けるコマンド) の中身に任せる。`send_command` は System Keychain の項目として設定する。承認 URL と、`add` が発行する登録 URL ([DR-0011](./DR-0011-user-keychain-signed-records.md)) がこの経路を通る
+- `send_command` が未設定なら URL を tty に表示する。terminal のリンククリックか、コピペ (ユニバーサルクリップボードで iPhone へ) で足りる
+- 通知経路 (`send_command` の先) は、利用者が選んだ経路として信頼境界の内側に置く
+- `send_command` の子プロセスは呼び出しユーザに永久降格して起動する (起動の手順は [DR-0003](./DR-0003-helper-outside-sudo.md))
 - `send_command` の失敗は警告のみで、認証失敗にしない
 
 ## 不採用案と理由
@@ -23,9 +24,10 @@
 ## Consequences
 
 - 新しい通知手段への対応はコマンドを書くだけで済み、モジュールの変更が要らない
-- 経路上で URL を見られる前提になるので、URL の中身は暗号化と期限で守る ([DR-0006](./DR-0006-approval-url-and-exchange.md))
+- URL は期限付きの capability なので、経路上で URL を見た者は期限内にそれを使える。承認 URL なら要求詳細を読め、assertion の置き場に書ける (署名が無いので pass にはできない。[DR-0006](./DR-0006-approval-url-and-exchange.md))。登録 URL なら自分の credential を登録させられる。経路を信頼境界の内側に置くのはこのため
 
 ## 関連
 
+- [DR-0003](./DR-0003-helper-outside-sudo.md)
 - [DR-0006](./DR-0006-approval-url-and-exchange.md)
 - [DR-0011](./DR-0011-user-keychain-signed-records.md)

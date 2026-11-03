@@ -17,8 +17,8 @@
 
 ## 実用的な示唆 / ベストプラクティス
 
-- securityd は System Keychain への書き込みを、Authorization right でなく呼び出し元の euid で判定していると解釈できる。ユーザ権限から書き込ませる設計は成立しないので、書き込みは `sudo pam-passkey setup` / `add` / `del` のように root で行う
-- この性質は、ユーザ権限のプロセスが鍵を登録して自分の sudo を承認する経路を塞ぐ歯止めとして使える
+- securityd は System Keychain への書き込みを、Authorization right でなく呼び出し元の euid で判定していると解釈できる。ユーザ権限から System Keychain に書き込ませる設計は成立しないので、System Keychain への書き込みは root で行う (`sudo pam-passkey setup`)。passkey の項目はユーザの login keychain に署名付きで置くので、`add` / `del` は root を要さない ([DR-0011](../decisions/DR-0011-user-keychain-signed-records.md))
+- この性質は、ユーザ権限のプロセスが System Keychain の署名鍵や設定を書き換えて自分の sudo を承認する経路を塞ぐ歯止めとして使える
 - 秘密でない項目は「全アプリ可」の ACL にすれば、sudo 内 PAM からの読み出しで main executable (`/usr/bin/sudo`) の ACL 問題を踏まない
 
 ## 検証の詳細

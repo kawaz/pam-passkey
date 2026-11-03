@@ -1,4 +1,4 @@
-# DR-0009: 前面制御は `open` 時のブラウザ activate のみとし、承認後に起動元へ戻さない
+# DR-0009: 前面制御は承認ページを開いた時のブラウザ activate のみとし、承認後に起動元へ戻さない
 
 - Status: Accepted
 - Date: 2026-11-02
@@ -11,7 +11,7 @@ sudo のプロセスツリー (ppid) を辿って得られる起動元は「sudo
 
 ## Decision
 
-- 前面制御は、helper が承認ページを `open` した時にそのブラウザを activate するだけにする
+- 前面制御は、helper が承認ページを開いた時 (開き方は [DR-0004](./DR-0004-fallback-button-as-details.md)) にそのブラウザを activate するだけにする
 - 承認後に起動元 terminal へ前面を戻す処理はしない
 
 ## 不採用案と理由
