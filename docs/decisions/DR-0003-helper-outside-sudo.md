@@ -11,13 +11,13 @@ remote 承認には、要求のストアへの PUT、通知コマンドの起動
 - root の sudo プロセスの中でネットワーク (TLS) を喋ることになる
 - デバッグが難しく、動作確認のたびに sudo を経由する
 
-また、helper が受け取る assertion は presigned PUT URL を知る者なら誰でも書ける。helper とその子は root から起動されるので、起動の仕方と置き場を誤ると、同じ uid のプロセスや攻撃者が書いたデータから root に届く。
+また、helper とその子は root から起動されるので、起動の仕方と置き場を誤ると、同じ uid のプロセスから root に届く。
 
 ## Decision
 
 - helper は `pam-passkey` CLI の内部サブコマンドとして実装し、PAM モジュールはこれを spawn する薄い層にする。ロジックは CLI 側に置く
-- helper は root で起動する。root が要る処理は、子を `PAM_USER` に永久降格させて起動すること (`setgroups` / `setgid` / `setuid` は root でしか行えない) だけで、root の helper はそれ以外の処理を持たない
-- ストアとの通信、assertion の解析と検証、login keychain の読み出し、`send_command`、承認ページを開く処理は、`PAM_USER` に永久降格した子で行う。root の helper は子から判定 (pass / fail) だけを受け取り、攻撃者が書けるデータを root で解析しない
+- helper は root で起動し、ストアとの通信、assertion の検証、result の PUT を自分で行う
+- `PAM_USER` の権限が要る処理 (login keychain の読み出し、`send_command`、承認ページを開く) だけを、`PAM_USER` に永久降格した子で行う (`setgroups` / `setgid` / `setuid`)
 - 子の永久降格は、`PAM_USER` の補助グループで `setgroups`、続けて `setgid`、`setuid` の順に行う。real / effective / saved の uid がすべて `PAM_USER` になり、子は root に戻れない
 - spawn の手順 (PAM が helper を起動する時と、helper が子を起動する時の両方):
   - 実行ファイルは絶対パスで指定する

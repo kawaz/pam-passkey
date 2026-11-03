@@ -16,7 +16,7 @@ Status は各 DR ファイルの `Status:` 行が正本。
 |---|---|---|
 | [DR-0001](DR-0001-naming.md) | N/A | 名前は PAM モジュール `pam_passkey`、CLI とリポジトリは `pam-passkey` |
 | [DR-0002](DR-0002-single-module-parallel-auth.md) | ⬜ 未実装 | PAM スタックは直列なので、1 モジュール内で Touch ID と remote 承認を並走させる |
-| [DR-0003](DR-0003-helper-outside-sudo.md) | ⬜ 未実装 | ロジックは sudo プロセス外の helper (`pam-passkey` CLI、root) に置き、PAM モジュールは薄層。通信と検証は永久降格した子で行い、`.so` と helper は root 所有の置き場に置く |
+| [DR-0003](DR-0003-helper-outside-sudo.md) | ⬜ 未実装 | ロジックは sudo プロセス外の helper (`pam-passkey` CLI、root) に置き、PAM モジュールは薄層。`PAM_USER` の権限が要る処理だけ永久降格した子で行い、`.so` と helper は root 所有の置き場に置く |
 | [DR-0004](DR-0004-fallback-button-as-details.md) | ⬜ 未実装 | 「詳細を確認」は LAContext の fallback ボタンを転用し、`LAErrorUserFallback` で拾う。承認ページは降格した子が `NSWorkspace` 相当で開く |
 | [DR-0005](DR-0005-s3-compatible-store.md) | ⬜ 未実装 | 中継は S3 互換ストアと presigned URL。デプロイするコードを持たない |
 | [DR-0006](DR-0006-approval-url-and-exchange.md) | ⬜ 未実装 | 承認 URL は `page_url#<presigned GET>` の 1 本、challenge はページが取得した要求そのものの SHA-256、result は pass / fail |

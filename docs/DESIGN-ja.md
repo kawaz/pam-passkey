@@ -46,7 +46,7 @@ macOS の PAM auth (主用途は sudo、`pam_tid` と同じ層) で、手元の 
 
 ```
 sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイアログ、fallback ボタン = 「詳細を確認」)
-                        └─ spawn ─▶ helper = `pam-passkey` CLI の内部サブコマンド (root。通信・検証・open・send_command は PAM_USER に永久降格した子で行う)
+                        └─ spawn ─▶ helper = `pam-passkey` CLI の内部サブコマンド (root。login keychain の読み出し・open・send_command は PAM_USER に永久降格した子で行う)
                                      │ 1. 要求 (詳細と presigned URL) を S3 互換ストアに PUT
                                      │ 2. 承認 URL を `send_command` の stdin に渡す。未設定なら tty に表示
                                      │ 3. assertion の object をポーリング (期限まで)
@@ -95,7 +95,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 
 ### helper の権限
 
-helper は root で起動するが (呼び出し元の euid が 0 でなければ降格せず、呼び出し元と同じ uid で動く)、root が要るのは子を `PAM_USER` に永久降格させて起動することだけ。ストアとの通信、assertion の解析と検証、login keychain の読み出し、`send_command`、承認ページを開く処理は降格した子で行い、root の helper は判定だけを受け取る。spawn の手順 (絶対パス、空の環境から許可リスト、0/1/2 以外の fd を閉じる、cwd / umask の固定) と降格の順序は [DR-0003](./decisions/DR-0003-helper-outside-sudo.md)。
+helper は root で起動するが (呼び出し元の euid が 0 でなければ降格せず、呼び出し元と同じ uid で動く)、ストアとの通信、assertion の検証、result の PUT は helper 自身が行う。`PAM_USER` の権限が要る処理 (login keychain の読み出し、`send_command`、承認ページを開く) だけを `PAM_USER` に永久降格した子で行う。spawn の手順 (絶対パス、空の環境から許可リスト、0/1/2 以外の fd を閉じる、cwd / umask の固定) と降格の順序は [DR-0003](./decisions/DR-0003-helper-outside-sudo.md)。
 
 ## 承認 URL と交換の流れ
 
