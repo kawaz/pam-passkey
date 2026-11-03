@@ -26,7 +26,8 @@
 ### 2 経路の独立
 
 - Touch ID の可否と remote の成否は独立に扱う。Touch ID が使えなくても remote は走る。Touch ID と remote が両方とも使えない時だけ `PAM_IGNORE`
-- remote が使えないとは、helper の起動失敗 (helper が無い / 置き場の検査に通らない / spawn の失敗)、`PAM_USER` の登録が 0 件、ストアに届かない、のいずれかを指す。それ以外で remote が通らないものは remote の失敗として扱う
+- remote が使えないとは、helper の起動失敗 (helper が無い / 置き場の検査に通らない / spawn の失敗)、`PAM_USER` の登録が 0 件、ストアに届かない、`PAM_USER` の login keychain が unlock されていない、のいずれかを指す。それ以外で remote が通らないものは remote の失敗として扱う
+- 片方でも走れば、走った経路の結果で `PAM_SUCCESS` / `PAM_AUTH_ERR` を返す
 - どちらかが成功したらもう片方を止めて `PAM_SUCCESS`、両方失敗したら `PAM_AUTH_ERR` ([DR-0002](./DR-0002-single-module-parallel-auth.md))
 - `PAM_USER` の GUI セッションが無ければ Touch ID は出さず、remote だけで待つ
 - キャンセルは両方を止めて `PAM_AUTH_ERR`
@@ -44,6 +45,7 @@
 
 - プロセス情報の収集と helper の spawn を済ませてから、`LAContext` の評価のために euid を `PAM_USER` の uid に落とす。評価後に `seteuid(0)` で戻す
 - euid を root に戻せなかったら、Touch ID の結果にかかわらず `PAM_AUTH_ERR`
+- 呼び出し元の euid が 0 でなければ、`seteuid` も降格もせず、呼び出し元の権限のまま評価する
 
 ### 状態遷移表
 
@@ -54,7 +56,8 @@
 | Touch ID ダイアログのキャンセル | 止める | 止める | `PAM_AUTH_ERR` |
 | 「詳細を確認」(fallback) | ダイアログを閉じる | 走り続け、helper が承認ページを開く ([DR-0004](./DR-0004-fallback-button-as-details.md)) | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR` |
 | 期限切れ | 止める | 止める | `PAM_AUTH_ERR` |
-| remote が使えない (helper の起動失敗 / 登録 0 件 / ストア不達) | 出す | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
+| remote が使えない (helper の起動失敗 / 登録 0 件 / ストア不達 / login keychain が unlock されていない) | 出す | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
+| ログイン画面 (`PAM_USER` の login keychain が unlock されていない) | 可否による | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
 | Ctrl-C | 止める | 止める | `PAM_AUTH_ERR` (キャンセルと同じ) |
 
 ## 不採用案と理由

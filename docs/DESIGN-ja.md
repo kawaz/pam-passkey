@@ -80,10 +80,10 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 
 状況ごとの Touch ID と remote の動作、PAM の戻り値は [DR-0012](./decisions/DR-0012-auth-state-transitions.md) の状態遷移表が正本。要点:
 
-- Touch ID の可否と remote の成否は独立。Touch ID が使えなくても remote は走る。両方とも使えない時だけ `PAM_IGNORE` で次のモジュールへ。fail-open にしない (remote が使えない = helper の起動失敗、登録 0 件、ストア不達のいずれか)
+- Touch ID の可否と remote の成否は独立。Touch ID が使えなくても remote は走る。両方とも使えない時だけ `PAM_IGNORE` で次のモジュールへ。fail-open にしない (remote が使えない = helper の起動失敗、登録 0 件、ストア不達、login keychain が unlock されていない、のいずれか)。片方でも走れば、その結果で `PAM_SUCCESS` / `PAM_AUTH_ERR`
 - helper が無い / 置き場の検査に通らない / ストアに届かない: remote 側だけ諦め、Touch ID は出す
 - `PAM_USER` の GUI セッションが無ければ Touch ID は出さず remote だけで待つ。キャンセルは両方止めて `PAM_AUTH_ERR`
-- ログイン画面 (login keychain が unlock されていない) では passkey の項目を読めず remote が成立しないので、パスワードへ落ちる
+- ログイン画面 (login keychain が unlock されていない) では passkey の項目を読めず remote は使えない。結果は Touch ID の可否で決まり、Touch ID も出せなければ `PAM_IGNORE` でパスワードへ落ちる
 - 全ての待ちに期限 (要求の期限と同じ) を設ける
 - `send_command` の失敗: 警告のみで認証失敗にしない
 
@@ -95,7 +95,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 
 ### helper の権限
 
-helper は root で起動するが、root が要るのは子を `PAM_USER` に永久降格させて起動することだけ。ストアとの通信、assertion の解析と検証、login keychain の読み出し、`send_command`、承認ページを開く処理は降格した子で行い、root の helper は判定だけを受け取る。spawn の手順 (絶対パス、空の環境から許可リスト、0/1/2 以外の fd を閉じる、cwd / umask の固定) と降格の順序は [DR-0003](./decisions/DR-0003-helper-outside-sudo.md)。
+helper は root で起動するが (呼び出し元の euid が 0 でなければ降格せず、呼び出し元と同じ uid で動く)、root が要るのは子を `PAM_USER` に永久降格させて起動することだけ。ストアとの通信、assertion の解析と検証、login keychain の読み出し、`send_command`、承認ページを開く処理は降格した子で行い、root の helper は判定だけを受け取る。spawn の手順 (絶対パス、空の環境から許可リスト、0/1/2 以外の fd を閉じる、cwd / umask の固定) と降格の順序は [DR-0003](./decisions/DR-0003-helper-outside-sudo.md)。
 
 ## 承認 URL と交換の流れ
 

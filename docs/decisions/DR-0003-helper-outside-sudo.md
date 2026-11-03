@@ -28,6 +28,7 @@ remote 承認には、要求のストアへの PUT、通知コマンドの起動
   - PAM は helper を spawn する前に、helper とその親ディレクトリの owner と mode を検査する。不合格なら remote を諦める (Touch ID は出す)
   - `setup` も `.so` と helper の置き場を同じ基準で検査する ([DR-0010](./DR-0010-cli-shape.md))
   - 置き場がユーザ所有になる配布 (Homebrew) は対象外
+- 呼び出し元の euid が 0 でなければ降格はせず、helper も子も呼び出し元と同じ uid で起動する
 
 ## 不採用案と理由
 
