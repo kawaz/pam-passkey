@@ -15,7 +15,7 @@ helper は、承認ページの URL、ストアの接続情報 (秘密を含む)
 
 - 前提: Keychain の項目の読み書きは helper バイナリ (Developer ID 署名) に限定する。System Keychain の項目も、`add` が書く login keychain の項目も、ACL を helper に絞る。PAM モジュールは Keychain を読まない
 - `setup` (root): 署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。設定項目 (`page_url` / `store` / `send_command`) も System Keychain に置く
-  - 再実行すると署名鍵を作り直し、既存の登録は全て無効になる (各ユーザが `add` し直す)
+  - 再実行すると署名鍵を作り直し、既存の登録は全て無効になる (各ユーザが `add` し直す)。署名鍵が既にあれば、その旨を 1 行出して y/N で確認する
   - 署名鍵のローテーション手順は持たない
 - `add` (ユーザ権限):
   1. helper が `LAContext` で Touch ID を要求する (policy は `deviceOwnerAuthentication`。Touch ID 非搭載機はパスワード)

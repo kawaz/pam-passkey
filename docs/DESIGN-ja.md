@@ -140,7 +140,7 @@ request JSON:  details (host / user / tty / argv / プロセスツリー)、nonc
 
 - Keychain の項目の読み書きは helper (Developer ID 署名) に限定し、全項目の ACL を helper に絞る。PAM モジュールは Keychain を読まない。ad-hoc 署名は build ごとに変わって ACL が外れるので、Developer ID 署名が前提
 - root (`sudo pam-passkey setup`) が要るのは System Keychain に書く `setup` の 1 回だけ。`add` / `del` / `list` はユーザ権限で動く。ユーザ権限からは Authorization right を取っても System Keychain に書けない ([findings](./findings/2026-11-02-keychain-poc.md))
-- `setup` は署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。再実行すると署名鍵を作り直し、既存の登録は全て無効になる (再 `add`)
+- `setup` は署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。再実行すると署名鍵を作り直し、既存の登録は全て無効になる (再 `add`)。署名鍵が既にあれば、その旨を 1 行出して y/N で確認する
 - 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
 - ユーザ権限のプロセスが勝手に鍵を登録して自分の認証を承認する経路は、署名と helper の入口の規律で塞ぐ (署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ、内部サブコマンドは署名鍵を使わない、ストアの秘密を出力に出さない、環境変数で参照先を切り替えられない)。根拠の全体は [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
 - `store` と `send_command` はシステムに 1 つなので、同じ Mac の別ユーザの認証の URL も同じ `send_command` に渡る
