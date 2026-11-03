@@ -21,23 +21,23 @@
 | 6 | Touch ID 不可で即 `PAM_IGNORE` は remote 承認の目的と矛盾 | M5 | M9 | 生体の可否と remote の成否を独立させる。Touch ID 不可でも remote は走る。両方不可のときだけ `PAM_IGNORE` |
 | 7 | WebAuthn の受理条件が不足 (type、UP、credential id の照合、署名入力、alg 固定、登録時の整合、サイズ上限、challenge の 1 回限り) | M6 | M7 | 検証項目の一覧を設計の付随詳細 (`docs/design/webauthn-verification.md`) に起こし、改ざんテストベクタを実装時に用意 |
 | 8 | signCount は保証にならない (同期 passkey は 0、ユーザ書き込み可の項目なら戻せる)。DESIGN の表と DR-0011 で署名範囲が食い違う | M6 / m10 | M3-3 / Minor | 検証項目から外し、記録もしない。DESIGN の表を直す |
-| 9 | 署名鍵のローテーション・紛失・再 setup と既存登録の扱いが未定 | M7 | M3-1 | PK-Q1 の結果で変わる。(A) なら署名鍵自体が無くなる |
+| 9 | 署名鍵のローテーション・紛失・再 setup と既存登録の扱いが未定 | M7 | M3-1 | `setup` の再実行は署名鍵を作り直し、既存登録は全て無効になる (再 `add`) と DR-0011 に書く。ローテーション手順は持たない |
 | 10 | PAM モジュールの crash / 無期限待ちはパスワードに流れない。全ての待ちに期限、キャンセル・Ctrl-C・helper 不在の遷移を決める | M8 | M9 | 状態遷移表を DR に起こす (GUI 有無 / ssh 由来 / 指紋登録 / キャンセル / fallback / 期限切れ / helper 起動失敗 / Ctrl-C)。helper の成功は要求 ID 付きの明示メッセージのみ (デフォルト拒否) |
 | 11 | 祖先チェーン / argv は snapshot であり証明ではない | M9 | Minor (偽装) | 注記は書かない (利用者の前提)。署名なし / ad-hoc / platform を視覚的に区別するだけ |
-| 12 | 既存 issue 2 件の受け入れ条件を広げる (ユーザ権限 `add` と root helper の両方、同 Team ID の別 identifier / 旧版バイナリ / root の `security` CLI、ファストユーザスイッチ、keychain パスワード不一致、ssh 由来の audit session) | 未検証 | M4 / 未検証 | issue 2 件を update。PK-Q1 で (A) なら ACL issue 自体が不要になる |
+| 12 | 既存 issue 2 件の受け入れ条件を広げる (ユーザ権限 `add` と root helper の両方、同 Team ID の別 identifier / 旧版バイナリ / root の `security` CLI、ファストユーザスイッチ、keychain パスワード不一致、ssh 由来の audit session) | 未検証 | M4 / 未検証 | issue 2 件を update |
 
 ## 片方だけの指摘 (採る)
 
 | # | 指摘 | 出所 | 処置 |
 |---|---|---|---|
 | 13 | `add` の Touch ID がクリップボードの中身に束縛されていない。ペーストボード差し替えで攻撃者の鍵が登録される | opus C2 | **設計変更** (kawaz 2026-11-03): クリップボードを廃止し、登録も承認と同じく登録ページが presigned PUT で返す。登録 URL は capability (tty 表示か `send_command` の stdin にしか出さず、`open` の argv にも載せない) なので第三者は PUT できず、指紋照合は不要 |
-| 14 | 署名済み helper はどの uid からも起動でき、秘密を使う入口が絞られていない (署名オラクル) | opus C3 | PK-Q1 で (B) なら「署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ」を不変条件化。(A) なら消える。どちらでも「内部サブコマンドは秘密を使わない」「環境変数で参照先を切り替えられない」は採る |
+| 14 | 署名済み helper はどの uid からも起動でき、秘密を使う入口が絞られていない (署名オラクル) | opus C3 | 前提は「Keychain の読み書きは helper に限定」。helper 自身の入口の規律を不変条件化: 署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ、内部サブコマンドは秘密を使わない、環境変数で参照先を切り替えられない、`list` は生の JWS を出さない |
 | 15 | helper と `.so` の置き場の所有権。Homebrew 配下はユーザ所有で、差し替えで即 root | opus C4 | DESIGN に「親ディレクトリまで root 所有・他者書き込み不可」を要件化。PAM は spawn 前に owner / mode を検査し、不合格なら remote を諦める。`setup` も検査。brew 配布は対象外と明記 |
 | 16 | sudo の timestamp で承認 1 件が「5 分間 root」になる | opus M1 | 承認画面に明記 (未決事項 3 を「出す」で確定)。`timestamp_timeout=0` の推奨は PK-Q4 |
 | 17 | PAM_USER と呼び出しユーザの一致、service の許可リスト | opus M2 | 不変条件化: `PAM_USER == getuid() のユーザ名` かつ service が許可リスト (初版は sudo のみ)。それ以外は `PAM_IGNORE` |
 | 18 | Mac 側「詳細を確認」経路は argv に復号鍵入り URL が載り (`ps` で他ユーザから見える)、ブラウザ履歴にも残りうる | opus M5 | 降格した子で `NSWorkspace` / `LSOpenCFURLRef` 相当を直接呼ぶ (`/usr/bin/open <URL>` を exec しない)。承認後に helper がストアのオブジェクトを DELETE。lifecycle ルールを setup 手順に |
 | 19 | 同期 passkey により iCloud / passkey プロバイダが TCB に入る | opus M8 | 信頼の前提に明記。同期鍵は受け入れる (iCloud 同期が設計の前提)。BE / BS の値は登録時に記録 |
-| 20 | helper を root で動かす理由が無く、攻撃者が書ける assertion を root で解析する | opus M11 | root が要る処理を列挙して DR-0003 に書く。PK-Q1 (A) なら store の秘密を root が読む必要があるので helper は root 起動、ネットワークと解析は降格した子で行い root 側は結果だけ受ける構成を DR-0003 に追記 |
+| 20 | helper を root で動かす理由が無く、攻撃者が書ける assertion を root で解析する | opus M11 | root が要る処理を列挙して DR-0003 に書く。ネットワークと解析は降格した子で行い root 側は結果だけ受ける構成を DR-0003 に追記 |
 | 21 | 拒否 / junk / 検証失敗 / ストア障害 / timeout を Mac 側では区別し、上書き競合の確定規則を決める | sol m11 | DR-0006 に「assertion を 1 つ受け取った時点で判定を確定 (junk なら fail)。以後の上書きは見ない」を追記 |
 | 22 | Minor 群: findings の古い示唆、fragment の区切り (`.` は URL に含まれる)、公開鍵の置き場 (JWS か HMAC か)、Touch ID 本文の切り詰め、result の偽装可能性、GET サイズ上限、CORS、複数ユーザ、承認疲れ、Apple Watch、`test` の権限差、Ctrl-C | opus Minor | 文書修正で反映。暗号化を外すので fragment は presigned GET URL だけ。CORS と lifecycle を setup に。`test` / `doctor` は削除 (kawaz 2026-11-03。疎通確認は `setup` に寄せる)。レート制限は未決として残す |
 

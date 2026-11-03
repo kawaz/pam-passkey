@@ -18,22 +18,6 @@
 
 ## 裁定待ち
 
-### 👺PK-Q1: passkey の置き場。DR-0011 (login keychain + 署名) を維持するか、DR-0007 方式 (全状態 System Keychain、`add` / `del` は sudo) に戻すか
-
-- [ ] a (推奨): DR-0007 方式に戻す。全状態を root が書く System Keychain に置き、`add` / `del` は `sudo pam-passkey add`
-- [ ] b: DR-0011 維持 + 失効用の世代番号を System Keychain に持つ (失効には結局 root が要る)
-- [ ] c: Secure Enclave + biometry ACL の鍵で署名 (署名オラクルは塞がるが、公開鍵登録に root が要る)
-
-推奨理由: DR-0011 の「安全性は同等」は成立しない ([disposition](./research/2026-11-02-design-review-disposition.md) #9 / #14)。(1) `del` では失効できない (署名済み行を写した同 uid のプロセスが書き戻せる)、(2) ユーザ権限で起動できる署名オラクル (署名済み helper はどの uid からも起動でき、Touch ID 後の署名経路の実装の揺らぎがそのまま昇格経路になる) が生まれる。一方 DR-0011 が得るものは「`add` でパスワードを打たない」利便性だけで、ハシゴ外しの根拠は弱い (モジュールが壊れても失敗はパスワードに流れるので `sudo pam-passkey add` は動く)。(a) なら #9 / #14 と login keychain の検証 issue が消える。Developer ID 署名はストアの秘密の ACL のために a / b どちらでも前提として残る。
-
-### 👺PK-Q3: ページの origin (= rp_id)。共用の `kawaz.github.io` は使えない (同一 origin の他リポからも passkey を使える)
-
-- [ ] a (推奨): この用途専用の GitHub org を作り `<org>.github.io` をページ専用にする (そこに他の pages を置かない)
-- [ ] b: 専用のカスタムドメイン (例: `pam-passkey.<kawaz のドメイン>`) を GitHub Pages に当てる
-- [ ] c: 既定ページを配らず、利用者が各自ホストする (README に手順)
-
-推奨理由: (a) は費用ゼロで origin を分離でき、fork した人も同じ手順で自分の org を作れる。(b) はドメインの維持が要る。(c) は導入の敷居が上がる。
-
 ### 👺PK-Q4: 承認画面に「以降は sudo の timestamp の間 (既定 5 分) 無認証」と出すか (DESIGN 未決事項 3)
 
 - [ ] a (推奨): 出す
