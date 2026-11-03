@@ -11,7 +11,7 @@ PAM スタックは直列で、モジュールは上から 1 つずつ呼ばれ�
 
 ## Decision
 
-`pam_tid` の代わりに `pam_passkey.so` を置き、1 つのモジュールの中で Touch ID (LAContext) と remote 承認 (helper) を並走させる。どちらか成功したらもう片方をキャンセルして `PAM_SUCCESS`、両方失敗 / timeout なら `PAM_AUTH_ERR` で後続 (パスワード) へ流す。`pam_tid` (`touchIdAuth`) は off にする。
+`pam_tid` の代わりに `pam_passkey.so` を置き、1 つのモジュールの中で Touch ID (LAContext) と remote 承認 (helper) を並走させる。どちらか成功したらもう片方をキャンセルして `PAM_SUCCESS`、両方失敗 / timeout なら `PAM_AUTH_ERR`、両方とも使えなければ `PAM_IGNORE` で後続 (パスワード) へ流す。状況ごとの動作は [DR-0012](./DR-0012-auth-state-transitions.md)。`pam_tid` (`touchIdAuth`) は off にする。
 
 ## 不採用案と理由
 
@@ -24,9 +24,10 @@ PAM スタックは直列で、モジュールは上から 1 つずつ呼ばれ�
 
 - モジュールが Touch ID ダイアログの表示と remote 承認の待ちを両方持ち、片方の成功でもう片方を止める並行制御を持つ
 - Touch ID の扱い (LAContext の euid、fallback ボタン) もこのモジュールの責務になる ([DR-0004](./DR-0004-fallback-button-as-details.md))
-- remote 承認のロジックは sudo プロセス外の helper に置く ([DR-0003](./DR-0003-helper-outside-sudo.md))
+- remote 承認のロジックは呼び出し元のプロセス外の helper に置く ([DR-0003](./DR-0003-helper-outside-sudo.md))
 
 ## 関連
 
 - [DR-0003](./DR-0003-helper-outside-sudo.md)
 - [DR-0004](./DR-0004-fallback-button-as-details.md)
+- [DR-0012](./DR-0012-auth-state-transitions.md)

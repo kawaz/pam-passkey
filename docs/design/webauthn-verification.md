@@ -21,7 +21,7 @@
 | credential id | 認証対象ユーザの登録済み集合に含まれる。判定は helper 側で行い、ページの `allowCredentials` には頼らない |
 | 署名 | 登録済みの公開鍵で、`authenticatorData ‖ SHA-256(clientDataJSON)` に対して検証が通る。アルゴリズムは ES256 に固定する |
 | challenge の使用回数 | 1 回限り。assertion を受け取って判定したら、その要求の待ち状態を破棄する |
-| 期限 | 要求の期限内。判定は Mac の時計で helper が行う |
+| 期限 | request の `expires` 内。判定は Mac の時計で helper が行う |
 | signCount | 検証しない。Apple の同期 passkey は常に 0 を返し、保証にならない |
 
 ### 登録 (credential)
@@ -38,6 +38,8 @@
 | 公開鍵の COSE alg | ES256 (`-7`) だけを受け入れる |
 | credential id の長さ | 上限を超えない |
 | BE / BS フラグ | 同期される passkey (BE が立つもの) も受け入れる。値は登録時に JWS のペイロードに記録する |
+| challenge の使用回数 | 1 回限り。credential を受け取って判定したら、その登録要求の待ちを破棄する |
+| 期限 | 登録ペイロードの `expires` 内。判定は Mac の時計で `add` が行う |
 
 ### テスト
 
@@ -53,3 +55,4 @@
 - [DESIGN-ja.md](../DESIGN-ja.md) — 親文書
 - [DR-0006](../decisions/DR-0006-approval-url-and-exchange.md) — 承認 URL と交換
 - [DR-0011](../decisions/DR-0011-user-keychain-signed-records.md) — 登録と passkey の置き場
+- [exchange-format](./exchange-format.md) — assertion と credential の形、サイズ上限

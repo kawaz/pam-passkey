@@ -24,7 +24,7 @@ Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要�
 ## Consequences
 
 - 中継側に置くコードが無い。利用者が用意するのはバケットと access key だけ
-- ストアの access key / secret は秘密なので、System Keychain の ACL を Developer ID 署名の helper に絞る
+- ストアの access key / secret は秘密なので、System Keychain の ACL を Developer ID 署名の `pam-passkey` バイナリに絞る
 - presigned URL と request の期限を揃える
 
 ## 関連

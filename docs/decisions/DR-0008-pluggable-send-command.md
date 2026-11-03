@@ -13,6 +13,7 @@
 - `send_command` が未設定なら URL を tty に表示する。terminal のリンククリックか、コピペ (ユニバーサルクリップボードで iPhone へ) で足りる
 - 通知経路 (`send_command` の先) は、利用者が選んだ経路として信頼境界の内側に置く
 - `send_command` の子プロセスは `PAM_USER` に永久降格して起動する (起動の手順は [DR-0003](./DR-0003-helper-outside-sudo.md))
+- `send_command` はシェル (`/bin/sh -c`) で起動する。環境の許可リストは `PATH` `HOME` `USER` `LOGNAME` `LANG` `LC_*` `TMPDIR` `SSH_AUTH_SOCK`、cwd は `PAM_USER` の HOME
 - `send_command` の失敗は警告のみで、認証失敗にしない
 
 ## 不採用案と理由
