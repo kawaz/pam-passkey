@@ -26,8 +26,8 @@ helper は、承認ページの URL、ストアの接続情報 (秘密を含む)
   6. login keychain の項目 `users/<os user>` (JSONL) に保存する。読み出しの ACL は helper に絞る
 - 登録 URL は承認 URL と同じく期限付きの capability なので、URL を見ていない第三者は credential を PUT できない。登録ページと `add` の間で credential の指紋を照合する手順は持たない
 - `del` (ユーザ権限): login keychain から消すだけ
-- `list` (ユーザ権限): 自ユーザの項目を読んで一覧する。生の JWS は出さない
-- 認証時の検証: helper は呼び出しユーザに降格した子プロセスで login keychain の項目を読む (ユーザのセッションで unlock 済みの keychain を、root でなくユーザとして読む。改ざんは署名検証で弾くので読み手がユーザ権限でも問題ない)。System Keychain の公開鍵で JWS を検証し、検証に通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
+- `list` (ユーザ権限): 自ユーザの項目を読んで一覧する
+- 認証時の検証: helper は `PAM_USER` に降格した子プロセスで、`PAM_USER` の login keychain の `users/<PAM_USER>` の項目を読む (ユーザのセッションで unlock 済みの keychain を、root でなくユーザとして読む。改ざんは署名検証で弾くので読み手がユーザ権限でも問題ない)。System Keychain の公開鍵で JWS を検証し、検証に通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
 - signCount は記録しない (検証に使わない。[受理条件](../design/webauthn-verification.md))
 - 昇格を塞ぐ根拠:
   - 悪意あるユーザ権限のプロセスは helper を実行できるが、Touch ID のダイアログを通せない
@@ -35,7 +35,6 @@ helper は、承認ページの URL、ストアの接続情報 (秘密を含む)
   - helper の入口を次の規律で絞る。署名済みの helper はどの uid からも起動できるので、正規の入口 (サブコマンド、引数、環境変数、stdin) から秘密を使わせない
     - 署名鍵を読むのは `add` の、Touch ID 成功後の 1 か所だけ。PAM から呼ばれる内部サブコマンドは、ユーザ権限から直接起動されても署名鍵を使わない
     - 環境変数で参照先 (Keychain の項目、`page_url`、rp_id) を切り替えられない
-    - `list` は生の JWS を出さない (署名済みの行を写し取らせない)
   - login keychain のファイルを差し替えても、署名検証で無効になる
 - `del` は悪意あるプロセスにも可能だが、効果は remote 承認が消えてパスワード認証に落ちるだけで、昇格にはならない
 
