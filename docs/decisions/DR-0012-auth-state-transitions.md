@@ -32,12 +32,12 @@
 - どちらかが成功したらもう片方を止めて `PAM_SUCCESS`、両方失敗したら `PAM_AUTH_ERR` ([DR-0002](./DR-0002-single-module-parallel-auth.md))
 - `PAM_USER` の GUI セッションが無ければ Touch ID は出さず、remote だけで待つ。GUI セッションの有無は `SessionGetInfo` 相当で、`PAM_USER` の graphical session があるかで判定する
 - remote が走っている間に Touch ID が失敗しても (生体の不一致、lockout)、remote は止めず、Touch ID 側だけを終える
-- 「詳細を確認」の fallback ボタンは、remote が使える時だけ出す
+- 「詳細を確認」の fallback ボタンは常に出す。押された時に remote が使えない (helper が `unavailable` を返した後、または `open` に helper が応えられない) なら、両方を止めて `PAM_AUTH_ERR`
 - キャンセルは両方を止めて `PAM_AUTH_ERR`
 
 ### 待ちの期限
 
-- 期限の起点は request の `expires` 一本にする。全ての待ち (`LAContext` の応答、helper の応答) は、PAM も helper も同じ値で打ち切る
+- 期限の起点は request の `expires` 一本にする。値は PAM が決めて helper に渡す ([helper-protocol](../design/helper-protocol.md))。全ての待ち (`LAContext` の応答、helper の応答) は、PAM も helper も同じ値で打ち切る
 - 期限が来たら両方を止めて `PAM_AUTH_ERR`
 - 期限の後に届いた assertion は検証せず、fail にする
 
@@ -60,8 +60,9 @@
 | Touch ID ダイアログのキャンセル | 止める | 止める | `PAM_AUTH_ERR` |
 | remote の走行中に Touch ID が失敗 (生体の不一致、lockout) | 終える | 走り続ける | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR` |
 | 「詳細を確認」(fallback) | ダイアログを閉じる | 走り続け、helper が承認ページを開く ([DR-0004](./DR-0004-fallback-button-as-details.md)) | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR` |
+| remote が使えない時の「詳細を確認」 | 止める | 使えない | `PAM_AUTH_ERR` |
 | 期限切れ | 止める | 止める | `PAM_AUTH_ERR` |
-| remote が使えない (helper の起動失敗 / 登録 0 件 / ストア不達 / login keychain が unlock されていない) | 出す (「詳細を確認」ボタンは出さない) | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
+| remote が使えない (helper の起動失敗 / 登録 0 件 / ストア不達 / login keychain が unlock されていない) | 出す | 使えない | Touch ID 成功: `PAM_SUCCESS`<br>Touch ID 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>Touch ID も使えない: `PAM_IGNORE` |
 | Ctrl-C | 止める | 止める | `PAM_AUTH_ERR` (キャンセルと同じ) |
 
 ## 不採用案と理由

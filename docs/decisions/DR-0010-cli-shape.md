@@ -14,7 +14,7 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
 - passkey の操作は `ssh-add` / `useradd` の感触で動詞だけにする (操作対象はツール名から自明)
 - `setup`:
   - `page_url` を省略すると既定の `https://pam-passkey.github.io/` を使う
-  - `store` と `send_command` は対話で入力する (秘密の値は画面に出さない)。標準入力が tty でなければ、標準入力から JSON 1 行で受ける
+  - `store` と `send_command` は対話で入力する (秘密の値は画面に出さない)。標準入力が tty でなければ、標準入力から JSON 1 行で受ける。キーは `page_url`、`store` (オブジェクト)、`send_command`、`regenerate_key` (bool。既定は false で、署名鍵があれば維持する)
   - 署名鍵が既にあれば、作り直すと既存の登録が全て無効になる旨を 1 行出して y/N で確認する。N なら署名鍵は維持し、設定 (`page_url` / `store` / `send_command`) だけを更新する
   - ストアへの到達を確かめ、バケットの CORS と lifecycle ルール ([DR-0006](./DR-0006-approval-url-and-exchange.md)) を設定する。権限が無ければエラーで止まり、必要な設定を表示する
   - 自分の実行ファイルの置き場を [DR-0003](./DR-0003-helper-outside-sudo.md) の基準で検査する。`.so` の置き場は `--module <path>` が与えられた時だけ検査する

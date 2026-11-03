@@ -26,6 +26,7 @@
 | `user` | `PAM_USER` |
 | `caller_uid` | 呼び出し元の uid |
 | `id` | 要求 ID |
+| `expires` | 要求の期限 (RFC 3339 の UTC)。PAM が決める (既定は要求から 90 秒後)。helper はこれを request の `expires` と presigned URL の期限に使う |
 | `tty` | 呼び出し元の tty のパス。無ければ `null` |
 | `details` | PAM が呼び出し元のプロセス内で集めたプロセス情報 |
 
@@ -44,10 +45,10 @@ PAM は、起動時に渡した要求 ID を持つ `result` の `pass: true` 以
 | コマンド | 意味と helper の動作 |
 |---|---|
 | `{"cmd":"open"}` | 「詳細を確認」が押された。helper は `PAM_USER` に降格した子で承認ページを開く ([DR-0004](../decisions/DR-0004-fallback-button-as-details.md)) |
-| `{"cmd":"finish","pass":true}` | Touch ID が成功した。helper は result に `pass` を PUT して終了する |
+| `{"cmd":"finish","pass":true}` | Touch ID が成功した。PAM は送った後、helper の終了を待たずに `PAM_SUCCESS` を返す。helper は result に `pass` を PUT し、request と assertion を DELETE して自分で終了する |
 | 標準入力の close | キャンセル。helper は result に `fail` を PUT して終了する |
 
-helper から応答が無ければ、PAM は期限 (request の `expires`) の後に終了シグナルを送る。
+helper から応答が無ければ、PAM は期限 (`expires`) の後に終了シグナルを送る。
 
 ## 制約 / 前提
 

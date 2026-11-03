@@ -19,7 +19,7 @@
 | `kind` | `"approve"` |
 | `details` | 要求の詳細 (下表) |
 | `nonce` | 要求 ID ([helper-protocol](./helper-protocol.md)) |
-| `expires` | 要求の期限 |
+| `expires` | 要求の期限。PAM が決めて helper に渡した値 ([helper-protocol](./helper-protocol.md)) |
 | `assertion_put_url` | assertion を PUT する presigned URL |
 | `result_get_url` | result を GET する presigned URL |
 
@@ -33,7 +33,20 @@
 | `tty` | 呼び出し元の tty のパス。無ければ `null` |
 | `time` | 要求時刻 |
 | `argv` | 呼び出し元の argv (文字列の配列) |
-| `processes` | 呼び出し元から launchd までの祖先チェーン (配列)。各要素に載せる値は DESIGN-ja の「承認画面に見せるもの」 |
+| `processes` | 呼び出し元から launchd までの祖先チェーン (配列。要素は下表) |
+
+`processes` の各要素 (値が無いものは `null`):
+
+| キー | 中身 |
+|---|---|
+| `pid` | pid |
+| `uid` | プロセスの uid |
+| `cwd` | cwd |
+| `path` | 実行パス |
+| `argv` | argv (文字列の配列) |
+| `signing_id` | 署名 ID |
+| `team_id` | Team ID |
+| `signer` | 署名者名 |
 
 ### 登録ペイロード (登録、`add` → ページ)
 
