@@ -5,7 +5,7 @@
 
 ## Context
 
-Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要求詳細・assertion・結果を受け渡す中継が要る。Mac 側に常駐サーバや受信ポートを持たず、中継側にもデプロイして維持するコードを置きたくない。中継は信頼しない前提で、真正性は passkey 署名の検証で担保する ([DR-0006](./DR-0006-approval-url-and-exchange.md))。
+Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要求詳細・assertion・結果を受け渡す中継が要る。`add` が登録ページから credential を受け取る時も同じ中継を使う ([DR-0011](./DR-0011-user-keychain-signed-records.md))。Mac 側に常駐サーバや受信ポートを持たず、中継側にもデプロイして維持するコードを置きたくない。中継は信頼しない前提で、真正性は passkey 署名の検証で担保する ([DR-0006](./DR-0006-approval-url-and-exchange.md))。
 
 ## Decision
 

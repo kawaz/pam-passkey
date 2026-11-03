@@ -21,7 +21,7 @@ PAM モジュール内からはブラウザを開けず ([DR-0003](./DR-0003-hel
 | 案 | 不採用理由 |
 |---|---|
 | sudo のたびにブラウザで承認ページを自動で開く | 作業中のブラウザのタブが遷移し、承認後のタブの後始末も要る |
-| Mac ネイティブの passkey (ASAuthorization) で承認する | entitlement はメイン実行ファイル (`/usr/bin/sudo`) に付くので PAM モジュール内からは使えない。helper を .app にして Developer ID で署名する必要があり重い |
+| Mac ネイティブの passkey (ASAuthorization) で承認する | entitlement はメイン実行ファイル (`/usr/bin/sudo`) に付くので PAM モジュール内からは使えない。helper を .app にする必要があり重い |
 
 ## Consequences
 

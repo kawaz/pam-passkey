@@ -29,8 +29,11 @@
 | 対象 | 条件 |
 |---|---|
 | `clientDataJSON.type` | `"webauthn.create"` |
-| `clientDataJSON.challenge` | `add` が発行した登録要求のものと一致する |
-| `authenticatorData` の flags | AT (attested credential data あり) が立っている |
+| `clientDataJSON.challenge` | `add` が PUT した登録ペイロードのバイト列全体の SHA-256 と一致する (承認と同じ形) |
+| `clientDataJSON.origin` | `page_url` の origin と scheme / host / port まで完全一致する |
+| `clientDataJSON.crossOrigin` | `false` または不在 |
+| `authenticatorData.rpIdHash` | `SHA-256(rp_id)` と一致する |
+| `authenticatorData` の flags | UP、UV、AT (attested credential data あり) が立っている |
 | 公開鍵の COSE alg | ES256 (`-7`) だけを受け入れる |
 | credential id の長さ | 上限を超えない |
 | BE / BS フラグ | 同期される passkey (BE が立つもの) も受け入れる。値は登録時に JWS のペイロードに記録する |

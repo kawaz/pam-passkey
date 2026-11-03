@@ -4,7 +4,7 @@
 
 ## ドメイン
 
-macOS の PAM の auth (`pam_tid` と同じ層) で、手元の Touch ID と、手元に居ない時の iPhone からの passkey 承認を同時に受け付ける。一般の PAM auth モジュールで、主用途は sudo の認証。
+macOS の PAM auth (主用途は sudo、`pam_tid` と同じ層) で、手元の Touch ID と、手元に居ない時の iPhone からの passkey 承認を同時に受け付ける。
 
 ### 目的
 
@@ -80,7 +80,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 
 状況ごとの Touch ID と remote の動作、PAM の戻り値は [DR-0012](./decisions/DR-0012-auth-state-transitions.md) の状態遷移表が正本。要点:
 
-- Touch ID の可否と remote の成否は独立。Touch ID が使えなくても remote は走る。両方とも使えない時だけ `PAM_IGNORE` で次のモジュールへ。fail-open にしない
+- Touch ID の可否と remote の成否は独立。Touch ID が使えなくても remote は走る。両方とも使えない時だけ `PAM_IGNORE` で次のモジュールへ。fail-open にしない (remote が使えない = helper の起動失敗、登録 0 件、ストア不達のいずれか)
 - helper が無い / 置き場の検査に通らない / ストアに届かない: remote 側だけ諦め、Touch ID は出す
 - `PAM_USER` の GUI セッションが無ければ Touch ID は出さず remote だけで待つ。キャンセルは両方止めて `PAM_AUTH_ERR`
 - ログイン画面 (login keychain が unlock されていない) では passkey の項目を読めず remote が成立しないので、パスワードへ落ちる
@@ -142,7 +142,7 @@ request JSON:  details (host / user / tty / argv / プロセスツリー)、nonc
 - root (`sudo pam-passkey setup`) が要るのは System Keychain に書く `setup` の 1 回だけ。`add` / `del` / `list` はユーザ権限で動く。ユーザ権限からは Authorization right を取っても System Keychain に書けない ([findings](./findings/2026-11-02-keychain-poc.md))
 - `setup` は署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。再実行すると署名鍵を作り直し、既存の登録は全て無効になる (再 `add`)
 - 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
-- ユーザ権限のプロセスが勝手に鍵を登録して自分の認証を承認する経路は、署名と helper の入口の規律で塞ぐ (署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ、内部サブコマンドは署名鍵を使わない、環境変数で参照先を切り替えられない)。根拠の全体は [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
+- ユーザ権限のプロセスが勝手に鍵を登録して自分の認証を承認する経路は、署名と helper の入口の規律で塞ぐ (署名鍵を読むのは `add` の Touch ID 成功後の 1 か所だけ、内部サブコマンドは署名鍵を使わない、ストアの秘密を出力に出さない、環境変数で参照先を切り替えられない)。根拠の全体は [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
 - `store` と `send_command` はシステムに 1 つなので、同じ Mac の別ユーザの認証の URL も同じ `send_command` に渡る
 
 | 置き場 | 項目 | 中身 |
@@ -160,7 +160,7 @@ request JSON:  details (host / user / tty / argv / プロセスツリー)、nonc
 
 | サブコマンド | 用途 |
 |---|---|
-| `setup <page_url>` | 初期設定 (root)。ストアへの到達、バケットの CORS、`.so` と helper の置き場の所有権も確認する |
+| `setup [page_url]` | 初期設定 (root)。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。ストアへの到達、バケットの CORS、`.so` と helper の置き場の所有権も確認する |
 | `add [label]` | passkey を登録する (Touch ID を求める) |
 | `list` | 自ユーザの passkey を一覧する (login keychain を読むだけ) |
 | `del <label\|id>` | passkey を削除する |
@@ -172,7 +172,7 @@ request JSON:  details (host / user / tty / argv / プロセスツリー)、nonc
 先頭に host、ユーザ、tty、呼び出しプロセスの argv、時刻、期限。本体は呼び出しプロセスから launchd まで辿った祖先チェーンを pstree 風に縦一覧で出す (祖先は一直線なので折りたたみは不要)。各行は代表値 (プロセス名、署名 ID か Team ID、ユーザ) だけにし、行をクリックすると詳細が開く:
 
 - pid、ユーザ、cwd、実行パス、argv
-- 署名 ID (bundle ID 相当)、Team ID (`SecCodeCopyGuestWithAttributes` → `SecCodeCheckValidity` → `SecCodeCopySigningInformation`)
+- 署名 ID (bundle ID 相当)、Team ID、署名者名 (`SecCodeCopyGuestWithAttributes` → `SecCodeCheckValidity` → `SecCodeCopySigningInformation`)
 
 署名なし / ad-hoc 署名 / platform バイナリは、行の見た目で区別する。
 

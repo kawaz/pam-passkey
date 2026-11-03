@@ -10,7 +10,10 @@ pam-passkey/
     DESIGN-ja.md / DESIGN.md  # 現在の設計
     STRUCTURE.md              # このファイル
     decisions/                # 設計判断の記録 (DR-NNNN-*.md と INDEX.md)
+    design/                   # 設計の付随詳細 (<topic>-<sub>.md)
     findings/                 # 前提検証の観測記録 (YYYY-MM-DD-<slug>.md)
+    research/                 # 中期テーマの深掘り・レビュー (YYYY-MM-DD-<slug>.md)
+    issue/                    # 自リポの TODO と依頼 (YYYY-MM-DD-<slug>.md と INDEX.md)
   poc/                      # 前提検証の PoC。本体の実装ではない
     pam/                      # 自作 PAM モジュールを sudo から load し Touch ID で通す (Rust cdylib + C / Objective-C shim)
     keychain/                 # System Keychain の書き込み権限と sudo 内 PAM からの読み出し (Rust + C shim、kc-poc CLI と pam_kcpoc.so)

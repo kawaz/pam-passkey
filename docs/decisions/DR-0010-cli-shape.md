@@ -10,8 +10,9 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
 ## Decision
 
 - helper と管理機能を `pam-passkey` の 1 バイナリにまとめる
-- サブコマンドは `setup <page_url>` / `add [label]` / `list` / `del <label|id>` と、PAM から呼ばれる内部用サブコマンド
+- サブコマンドは `setup [page_url]` / `add [label]` / `list` / `del <label|id>` と、PAM から呼ばれる内部用サブコマンド
 - passkey の操作は `ssh-add` / `useradd` の感触で動詞だけにする (操作対象はツール名から自明)
+- `setup` の `page_url` を省略すると既定の `https://pam-passkey.github.io/` を使う
 - 疎通確認 (ストアへの到達、バケットの CORS、`.so` と helper の置き場の所有権) は `setup` が行う
 
 ## 不採用案と理由
