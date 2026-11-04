@@ -1,0 +1,15 @@
+[package]
+name = "pam_passkey"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+cc = "1.2.0"

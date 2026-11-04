@@ -1,0 +1,16 @@
+[package]
+name = "pam-passkey"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+security-framework = "3.7.0"
+security-framework-sys = "2.17.0"
+core-foundation = "0.10.1"
+libc = "0.2"
+protocol = { path = "../protocol" }
+
+[build-dependencies]
+cc = "1.2.0"

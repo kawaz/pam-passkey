@@ -30,6 +30,22 @@ poc:
     cd poc/pam && cargo build --release && cargo test
     cd poc/keychain && cargo build --release
 
+# ---------- production build / installation ----------
+
+# build both modules and sign the helper with a stable Developer ID identity
+build:
+    cargo build --release
+    codesign -s 8397C1D2A3AAE1E47BE23855C0C9E83EA52BC1B1 --options runtime --timestamp --force target/release/pam-passkey
+    codesign -s 8397C1D2A3AAE1E47BE23855C0C9E83EA52BC1B1 --options runtime --timestamp --force target/release/libpam_passkey.dylib
+    codesign --verify --strict target/release/pam-passkey
+    codesign --verify --strict target/release/libpam_passkey.dylib
+
+# install into root-owned directories only, without modifying PAM configuration
+install: build
+    sudo install -d -m 755 -o root -g wheel /usr/local/libexec /usr/local/lib/pam
+    sudo install -m 755 -o root -g wheel target/release/pam-passkey /usr/local/libexec/pam-passkey
+    sudo install -m 755 -o root -g wheel target/release/libpam_passkey.dylib /usr/local/lib/pam/pam_passkey.so
+
 # ---------- gates (used by `just push`; rarely invoked directly) ----------
 
 # working copy is clean
