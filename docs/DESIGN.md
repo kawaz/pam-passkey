@@ -131,7 +131,7 @@ The enrollment URL, like the approval URL, is a time-limited capability, and is 
 No files for settings or state are kept. Settings and the signing key live in generic password items of the System Keychain (`/Library/Keychains/System.keychain`); passkeys live in generic password items of the user's login keychain.
 
 - Reads and writes of Keychain items are limited to the `pam-passkey` binary (Developer ID signed), and the ACL of every item is narrowed to this binary. The PAM module does not read the Keychain. An ad-hoc signature changes on every build and drops off the ACL, so Developer ID signing is a prerequisite
-- Root (`sudo pam-passkey setup`) is needed only once, for `setup`, which writes to the System Keychain. `add` / `del` / `list` run with user privileges
+- Root is needed only for the writes of `setup` to the System Keychain (`setup` re-runs itself with sudo only at the moment of writing). `add` / `del` / `list` run with user privileges
 - `setup` generates the signing key (a JWK private key), and puts the signing key and the public key for verification in the System Keychain. Regenerating the signing key by re-running invalidates all existing enrollments (run `add` again). If a signing key already exists it asks y/N, and on N it keeps the signing key and updates only the settings ([DR-0010](./decisions/DR-0010-cli-shape.md))
 - At authentication time the login keychain is read by a child that the helper dropped to `PAM_USER`, and the item `users/<PAM_USER>` is read (reading the unlocked login keychain as the user). Each JWS is verified with the public key, and entries that fail verification, or whose payload OS user name does not match the user being authenticated, are ignored as invalid
 - How the path is closed where a user-privileged process enrolls a key on its own and approves its own authentication is in [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
@@ -140,10 +140,10 @@ No files for settings or state are kept. Settings and the signing key live in ge
 | Location | Item | Content |
 |---|---|---|
 | System Keychain | `page_url` | URL of the approval / enrollment pages (`https://pam-passkey.github.io/` by default). `rp_id` is derived from it (`pam-passkey.github.io` by default) |
-| System Keychain | `store` | S3-compatible connection JSON (endpoint / bucket / region / prefix / access key / secret). Contains secrets |
+| System Keychain | `store` | S3-compatible connection JSON (endpoint / bucket / region / prefix / access key / secret), plus whether presigned PUTs can be made one-time with `If-None-Match: *` (`put_once`, determined by `setup`). Contains secrets |
 | System Keychain | `send_command` | Command that reads the approval URL and the enrollment URL from stdin. Empty means print to the tty |
-| System Keychain | Signing key | Key that signs the passkey entries (a JWK private key). Secret |
-| System Keychain | Public key of the signing key | Key that verifies the JWS of the passkey entries at authentication time |
+| System Keychain | Signing key | Key that signs the passkey entries (an Ed25519 JWK private key). Secret |
+| System Keychain | Public key of the signing key | Key that verifies the JWS of the passkey entries at authentication time (an Ed25519 JWK) |
 | login keychain | `users/<os user>` | JSONL of that user's passkeys. Each line is a JWS whose payload holds the OS user name, credential id, user handle, public key, label, enrollment date and the BE / BS flags at enrollment. One item per user |
 
 Everything else (polling interval, button labels) is a code default.
@@ -152,7 +152,7 @@ Everything else (polling interval, button labels) is a code default.
 
 | Subcommand | Purpose |
 |---|---|
-| `setup [--module <path>] [page_url]` | Initial setup (root). If `page_url` is omitted, the default `https://pam-passkey.github.io/` is used. Takes `store` and `send_command`, checks that the store is reachable, sets the CORS and lifecycle of the bucket, and checks the ownership of the install locations |
+| `setup [--module <path>] [page_url]` | Initial setup (sudo at write time). If `page_url` is omitted, the default `https://pam-passkey.github.io/` is used. Takes `store` and `send_command`, checks that the store is reachable, sets the CORS and lifecycle of the bucket, and checks the ownership of the install locations |
 | `add [label]` | Enroll a passkey (asks for identity verification). The default label is the enrollment date and time |
 | `list` | List your own passkeys (label, credential id, enrollment date) |
 | `del <label\|id>` | Delete a passkey |

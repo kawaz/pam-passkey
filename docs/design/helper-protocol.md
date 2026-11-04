@@ -45,7 +45,7 @@ PAM は、起動時に渡した要求 ID を持つ `result` の `pass: true` 以
 | コマンド | 意味と helper の動作 |
 |---|---|
 | `{"cmd":"open"}` | 「詳細を確認」が押された。helper は `PAM_USER` に降格した子で承認ページを開いてブラウザを activate し、PAM からの `reactivate` に応えてもう一度 activate する ([DR-0004](../decisions/DR-0004-fallback-button-as-details.md)) |
-| `{"cmd":"reactivate"}` | PAM が `open` の後にダイアログを出し直した。helper は降格した子でブラウザをもう一度 activate する ([DR-0009](../decisions/DR-0009-foreground-control.md)) |
+| `{"cmd":"reactivate"}` | PAM が `open` の後にダイアログを出し直した (出し直すたびに常に送る)。helper は降格した子でブラウザをもう一度 activate する ([DR-0009](../decisions/DR-0009-foreground-control.md)) |
 | `{"cmd":"finish","pass":true}` | Touch ID が成功した。PAM は送った後、helper の終了を待たずに `PAM_SUCCESS` を返す。helper は result に `pass` を PUT し、request と assertion を DELETE して自分で終了する |
 | 標準入力の close | キャンセル。helper は result に `fail` を PUT して終了する |
 
