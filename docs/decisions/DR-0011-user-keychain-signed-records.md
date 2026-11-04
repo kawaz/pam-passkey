@@ -14,7 +14,7 @@ helper は、承認ページの URL、ストアの接続情報 (秘密を含む)
 ## Decision
 
 - 前提: Keychain の項目の読み書きは `pam-passkey` バイナリ (Developer ID 署名) に限定する。System Keychain の項目も、`add` が書く login keychain の項目も、ACL を `pam-passkey` バイナリに絞る。PAM モジュールは Keychain を読まない
-- `setup` (root): 署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。設定項目 (`page_url` / `store` / `send_command`) も System Keychain に置く
+- `setup` (書き込みは root): 署名鍵 (Ed25519 の JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。設定項目 (`page_url` / `store` / `send_command`) も System Keychain に置く
   - 再実行で署名鍵を作り直すと、既存の登録は全て無効になる (各ユーザが `add` し直す)。再実行時の確認は [DR-0010](./DR-0010-cli-shape.md)
   - 署名鍵のローテーション手順は持たない
 - `add` (ユーザ権限):

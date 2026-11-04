@@ -13,7 +13,7 @@ PAM モジュール内からはブラウザを開けず ([DR-0003](./DR-0003-hel
 
 - LAContext の fallback ボタンを `localizedFallbackTitle` で「詳細を確認」に差し替える
 - policy は `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion` (生体 / companion のみの系) にする。この系では fallback がパスワード入力に行かず、押下は `LAErrorUserFallback` (-3) で返る
-- 押されたら helper が承認ページを開く。Mac でも iCloud 同期された同じ passkey で署名できる
+- 押されると `LAContext` の評価は `-3` で返り、ダイアログは閉じる。PAM は helper に `open` を送って承認ページを開かせ、続けて新しい `LAContext` でダイアログを出し直し、Touch ID と remote の両方が使える状態に戻す。押すたびに同じことをする。Mac でも iCloud 同期された同じ passkey で署名できる
 - 開く処理は、`PAM_USER` に永久降格した子 ([DR-0003](./DR-0003-helper-outside-sudo.md)) が `NSWorkspace` / `LSOpenCFURLRef` 相当を直接呼んで行う。`/usr/bin/open <URL>` は exec しない。承認 URL をプロセスの argv に出さないためで、argv は `ps` で他ユーザからも読める
 
 ## 不採用案と理由
@@ -25,7 +25,8 @@ PAM モジュール内からはブラウザを開けず ([DR-0003](./DR-0003-hel
 
 ## Consequences
 
-- 「詳細を確認」を押した時点で Touch ID ダイアログは閉じ、承認は承認ページ側の passkey 署名で行う
+- 「詳細を確認」を押した後も、承認ページでの passkey 署名と、出し直したダイアログでの Touch ID のどちらでも通せる
+- 出し直したダイアログの前面の挙動とタッチの反応は未検証 ([findings](../findings/2026-11-02-pam-poc.md))
 - 承認ページは iPhone と Mac で共通の 1 つで済む
 
 ## 関連

@@ -131,7 +131,7 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 設定・状態のファイルを持たない。設定と署名鍵は System Keychain (`/Library/Keychains/System.keychain`)、passkey はユーザの login keychain の generic password 項目に置く。
 
 - Keychain の項目の読み書きは `pam-passkey` バイナリ (Developer ID 署名) に限定し、全項目の ACL をこのバイナリに絞る。PAM モジュールは Keychain を読まない。ad-hoc 署名は build ごとに変わって ACL が外れるので、Developer ID 署名が前提
-- root (`sudo pam-passkey setup`) が要るのは System Keychain に書く `setup` の 1 回だけ。`add` / `del` / `list` はユーザ権限で動く
+- root が要るのは System Keychain に書く `setup` の書き込みだけ (`setup` が書き込みの瞬間だけ自分を sudo で再実行する)。`add` / `del` / `list` はユーザ権限で動く
 - `setup` は署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。再実行で署名鍵を作り直すと、既存の登録は全て無効になる (再 `add`)。署名鍵が既にあれば y/N で確認し、N なら署名鍵を残して設定だけを更新する ([DR-0010](./decisions/DR-0010-cli-shape.md))
 - 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
 - ユーザ権限のプロセスが勝手に鍵を登録して自分の認証を承認する経路の塞ぎ方は [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
@@ -140,10 +140,10 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 | 置き場 | 項目 | 中身 |
 |---|---|---|
 | System Keychain | `page_url` | 承認 / 登録ページの URL (既定は `https://pam-passkey.github.io/`)。`rp_id` はここから導出する (既定は `pam-passkey.github.io`) |
-| System Keychain | `store` | S3 互換の接続情報 JSON (endpoint / bucket / region / prefix / access key / secret)。秘密を含む |
+| System Keychain | `store` | S3 互換の接続情報 JSON (endpoint / bucket / region / prefix / access key / secret) と、presigned PUT を `If-None-Match: *` で 1 回限りにできるか (`put_once`。`setup` が判定する)。秘密を含む |
 | System Keychain | `send_command` | 承認 URL と登録 URL を stdin で受けるコマンド。空なら tty 表示 |
-| System Keychain | 署名鍵 | passkey の項目に署名する鍵 (JWK、秘密鍵)。秘密 |
-| System Keychain | 署名鍵の公開鍵 | 認証時に passkey の項目の JWS を検証する鍵 |
+| System Keychain | 署名鍵 | passkey の項目に署名する鍵 (Ed25519 の JWK、秘密鍵)。秘密 |
+| System Keychain | 署名鍵の公開鍵 | 認証時に passkey の項目の JWS を検証する鍵 (Ed25519 の JWK) |
 | login keychain | `users/<os user>` | そのユーザの passkey の JSONL。各行は JWS で、ペイロードは OS ユーザ名、credential id、user handle、公開鍵、ラベル、登録日、登録時の BE / BS フラグ。1 ユーザ 1 項目 |
 
 それ以外 (ポーリング間隔、ボタン文言) はコードの既定値。
@@ -152,7 +152,7 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 
 | サブコマンド | 用途 |
 |---|---|
-| `setup [--module <path>] [page_url]` | 初期設定 (root)。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。`store` と `send_command` を受け取り、ストアへの到達を確かめ、バケットの CORS と lifecycle を設定し、置き場の所有権を検査する |
+| `setup [--module <path>] [page_url]` | 初期設定 (書き込み時に sudo)。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。`store` と `send_command` を受け取り、ストアへの到達を確かめ、バケットの CORS と lifecycle を設定し、置き場の所有権を検査する |
 | `add [label]` | passkey を登録する (本人確認を求める)。label の既定は登録日時 |
 | `list` | 自ユーザの passkey を一覧する (label、credential id、登録日) |
 | `del <label\|id>` | passkey を削除する |

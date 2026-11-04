@@ -12,7 +12,8 @@
 ## Decision
 
 - 承認 URL は `<page_url>#<request の presigned GET URL>` の 1 本にする。fragment はページのホストへのリクエストに含まれない。URL の長さは presigned URL 1 本分で、詳細が大きくなっても伸びない
-- request JSON は kind (`approve`)、details (host / `PAM_USER` / 呼び出し元の uid / tty / argv / プロセスツリー / 要求時刻)、nonce (要求 ID)、expires、assertion_put_url (presigned PUT)、result_get_url (presigned GET) を持つ。challenge のフィールドは持たない。credential id も入れない (discoverable credential が前提)。オブジェクトの形は [exchange-format](../design/exchange-format.md)
+- request JSON は kind (`approve`)、details (host / `PAM_USER` / 呼び出し元の uid / tty / argv / プロセスツリー / 要求時刻)、nonce (要求 ID)、expires、allow_credentials (`PAM_USER` の登録済み credential id の配列)、assertion_put_url (presigned PUT)、result_get_url (presigned GET) を持つ。challenge のフィールドは持たない。オブジェクトの形は [exchange-format](../design/exchange-format.md)
+- ページは allow_credentials を WebAuthn の `allowCredentials` に渡す。assertion の credential id が登録済みかは helper が登録済み集合と照合して判定する ([受理条件](../design/webauthn-verification.md))
 - challenge は、ページが presigned GET で取得したペイロード全体 (バイト列そのまま) の SHA-256 にする。ページは表示するのと同じバイト列から challenge を計算する。helper は自分が PUT したバイト列を保持して同じ値を計算するので、正規化は要らない
 - 要求詳細は暗号化しない。URL を持つ者は誰でも GET でき、持たない者は presigned GET できないので、暗号化して守れる相手はストアの運営者 (利用者自身のバケット) だけになる
 - helper は assertion を [受理条件](../design/webauthn-verification.md) で検証する。assertion を 1 件受け取った時点で判定を確定し (junk なら fail)、以後の上書きは見ない
@@ -26,7 +27,7 @@
 | assertion の検証失敗、拒否 | fail |
 | キャンセル、期限切れ、両方の失敗 | fail |
 
-- ページは result を低頻度で poll し、署名する前に result が出ればそれを表示する (Touch ID で通れば「承認済み」)。署名して PUT した後は高頻度で poll して pass / fail を表示する
+- ページは result を低頻度で poll し、署名する前に result が出ればそれを表示する (Touch ID で通れば「承認済み」)。署名して PUT した後は高頻度で poll して pass / fail を表示する。PUT から 10 秒後か request の `expires` の早い方で poll を止め、「結果を確認できなかった」と表示する
 - 拒否は、ページが assertion の場所に署名なしの内容を PUT するだけにする。helper は検証失敗 → fail とする。拒否専用の経路は持たない
 - helper は終了時に、終了経路を問わず request と assertion のオブジェクトをストアから DELETE する。result は消さず、lifecycle ルールに任せる
 - バケットには lifecycle ルール (残ったオブジェクトの削除) と CORS (ページの origin からの GET / PUT を許す) が要る。設定は `setup` が行う ([DR-0010](./DR-0010-cli-shape.md))

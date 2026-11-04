@@ -5,7 +5,7 @@
 
 ## Context
 
-承認 URL と登録 URL を受け手 (iPhone / Mac) に届ける手段は人によって違う (Bark、bark-admin、ntfy、ssh、チャット等)。
+承認 URL と登録 URL を受け手 (iPhone / Mac) に届ける手段は人によって違う (Bark、ntfy、ssh、チャット等)。
 
 ## Decision
 
@@ -20,7 +20,7 @@
 
 | 案 | 不採用理由 |
 |---|---|
-| bark-admin の API を組み込む | bark-admin は届け方の 1 つにすぎない。`send_command` の中身として書ける |
+| 特定の通知ツールの API を組み込む | その通知ツールは届け方の 1 つにすぎない。`send_command` の中身として書ける |
 
 ## Consequences
 

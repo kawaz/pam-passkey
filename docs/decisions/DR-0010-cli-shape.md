@@ -13,10 +13,12 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
 - サブコマンドは `setup [--module <path>] [page_url]` / `add [label]` / `list` / `del <label|id>` と、PAM から呼ばれる内部用サブコマンド
 - passkey の操作は `ssh-add` / `useradd` の感触で動詞だけにする (操作対象はツール名から自明)
 - `setup`:
+  - root でなく実行されたら、ユーザ権限で入力 (対話 / 非対話) を集めて検証し、書き込みの瞬間だけ自分の実行ファイルの絶対パスで `sudo <self> setup --stdin` を再実行し、集めた設定を JSON 1 行で stdin に渡す。root で直接実行された場合はそのまま書く。引数も入力も無ければヘルプを出す
   - `page_url` を省略すると既定の `https://pam-passkey.github.io/` を使う
   - `store` と `send_command` は対話で入力する (秘密の値は画面に出さない)。標準入力が tty でなければ、標準入力から JSON 1 行で受ける。キーは `page_url`、`store` (オブジェクト)、`send_command`、`regenerate_key` (bool。既定は false で、署名鍵があれば維持する)
   - 署名鍵が既にあれば、作り直すと既存の登録が全て無効になる旨を 1 行出して y/N で確認する。N なら署名鍵は維持し、設定 (`page_url` / `store` / `send_command`) だけを更新する
-  - ストアへの到達を確かめ、バケットの CORS と lifecycle ルール ([DR-0006](./DR-0006-approval-url-and-exchange.md)) を設定する。権限が無ければエラーで止まり、必要な設定を表示する
+  - ストアへの到達を確かめ、バケットの CORS と lifecycle ルール ([DR-0006](./DR-0006-approval-url-and-exchange.md)) を設定する。CORS の `AllowedHeaders` には `If-None-Match` を含める。権限が無ければエラーで止まり、必要な設定を表示する
+  - 疎通確認で、`If-None-Match: *` を付けた同じキーへの 2 回目の PUT が 412 になるかを試し、結果を `store` 設定の `put_once` (true / false) に持つ ([DR-0005](./DR-0005-s3-compatible-store.md))
   - 自分の実行ファイルの置き場を [DR-0003](./DR-0003-helper-outside-sudo.md) の基準で検査する。`.so` の置き場は `--module <path>` が与えられた時だけ検査する
 - `add` の label の既定値は登録日時 (`YYYY-MM-DD HH:MM`)。label は一意でなくてよい
 - `del` は引数が credential id に一致すればそれを優先する。label が複数の passkey に一致したらエラーで止まり、候補を出す
@@ -32,7 +34,7 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
 ## Consequences
 
 - PAM モジュールが spawn する対象は `pam-passkey` だけになる
-- root (`sudo pam-passkey ...`) が要るのは System Keychain に署名鍵と設定を書く `setup` だけ。`add` / `del` / `list` はユーザ権限で動く ([DR-0011](./DR-0011-user-keychain-signed-records.md))
+- root が要るのは System Keychain に署名鍵と設定を書く `setup` の書き込みだけで、`setup` が自分で sudo を呼ぶ。`add` / `del` / `list` はユーザ権限で動く ([DR-0011](./DR-0011-user-keychain-signed-records.md))
 
 ## 関連
 

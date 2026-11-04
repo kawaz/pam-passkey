@@ -12,14 +12,15 @@ Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要�
 - 中継は S3 互換のオブジェクトストアにする (R2 を想定。API 互換なら差し替え可)
 - ページからの読み書きは helper が発行する presigned URL (GET / PUT) で行う。presigned URL が期限付きの capability を兼ねる
 - presigned GET を使うことで、バケットに公開読みのポリシーを設定せずに済ませる
-- 接続情報 (endpoint / bucket / region / prefix / access key / secret) は System Keychain の `store` 項目に置く ([DR-0011](./DR-0011-user-keychain-signed-records.md))
+- presigned PUT (assertion / credential) は、ストアが対応していれば `If-None-Match: *` を署名ヘッダに含めて 1 回限りにする。対応の有無は `setup` が確かめて `store` 設定の `put_once` (true / false) に持ち ([DR-0010](./DR-0010-cli-shape.md))、helper と `add` は `put_once` が true の時だけヘッダを付ける。非対応のストアでは上書きできるまま
+- 接続情報 (endpoint / bucket / region / prefix / access key / secret / `put_once`) は System Keychain の `store` 項目に置く ([DR-0011](./DR-0011-user-keychain-signed-records.md))
 
 ## 不採用案と理由
 
 | 案 | 不採用理由 |
 |---|---|
 | Cloudflare Worker + KV | Worker のコードをデプロイして維持する必要がある |
-| 既存の bark-admin に相乗りする | bark-admin が公開ネットワークから到達できることに依存する |
+| 既存の通知ツールのサーバに相乗りする | そのサーバが公開ネットワークから到達できることに依存する |
 
 ## Consequences
 
@@ -30,4 +31,5 @@ Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要�
 ## 関連
 
 - [DR-0006](./DR-0006-approval-url-and-exchange.md)
+- [DR-0010](./DR-0010-cli-shape.md)
 - [DR-0011](./DR-0011-user-keychain-signed-records.md)

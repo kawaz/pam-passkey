@@ -11,14 +11,15 @@ sudo のプロセスツリー (ppid) を辿って得られる起動元は「sudo
 
 ## Decision
 
-- 前面制御は、helper が承認ページを開いた時 (開き方は [DR-0004](./DR-0004-fallback-button-as-details.md)) にそのブラウザを activate するだけにする
+- 前面制御は、helper が承認ページを開いた時 (開き方は [DR-0004](./DR-0004-fallback-button-as-details.md)) にそのブラウザを activate することと、出し直したダイアログの後にブラウザをもう一度 activate することだけにする
+- 「詳細を確認」の後の前面はブラウザが取る。順序は、helper の子が承認ページを開いてブラウザを activate → PAM がダイアログを出し直す → ダイアログが前面を取った場合は helper の子がブラウザをもう一度 activate する ([helper-protocol](../design/helper-protocol.md) の `reactivate`)。`LAContext` に前面制御の API は無いので、前面の調整は helper 側で行う
 - 承認後に起動元 terminal へ前面を戻す処理はしない
 
 ## 不採用案と理由
 
 | 案 | 不採用理由 |
 |---|---|
-| 承認後にプロセスツリーの起動元 terminal を前面に戻す | 起動元と操作中のアプリが一致しない。例えば ccmsg 経由で Claude が叩いた sudo を iPhone / ブラウザで承認した時に、使っていない terminal を前面にしてしまう |
+| 承認後にプロセスツリーの起動元 terminal を前面に戻す | 起動元と操作中のアプリが一致しない。例えば VS Code 内の Claude が叩いた sudo を iPhone / ブラウザで承認した時に、使っていない terminal を前面にしてしまう |
 
 ## Consequences
 
@@ -29,3 +30,4 @@ sudo のプロセスツリー (ppid) を辿って得られる起動元は「sudo
 
 - [DR-0003](./DR-0003-helper-outside-sudo.md)
 - [DR-0004](./DR-0004-fallback-button-as-details.md)
+- [helper-protocol](../design/helper-protocol.md) — PAM モジュールと helper の取り決め

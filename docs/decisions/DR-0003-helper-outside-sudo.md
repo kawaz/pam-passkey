@@ -27,6 +27,7 @@ remote 承認には、要求のストアへの PUT、通知コマンドの起動
   - cwd と umask を固定する
 - 置き場: `.so` と `pam-passkey` バイナリは、ファイルと親ディレクトリ (`/` まで) が root 所有で、root 以外に書き込み権の無い場所に置く
   - PAM は helper を spawn する前に、`pam-passkey` バイナリとその親ディレクトリの owner と mode を検査する。不合格なら remote を諦める (Touch ID は出す)
+  - PAM は helper を spawn した直後に、その pid の署名を `SecCodeCopyGuestWithAttributes` (`kSecGuestAttributePid`) → `SecCodeCheckValidity` で Team ID と identifier の requirement に対して検査する。不合格なら helper を止めて remote を諦める (Touch ID は出す)
   - `setup` も同じ基準で置き場を検査する ([DR-0010](./DR-0010-cli-shape.md))
   - 置き場がユーザ所有になる配布 (Homebrew) は対象外
 - 呼び出し元の euid が 0 でなければ降格はせず、helper も子も呼び出し元と同じ uid で起動する
@@ -41,8 +42,8 @@ remote 承認には、要求のストアへの PUT、通知コマンドの起動
 ## Consequences
 
 - PAM モジュールに入れてよいのは、プロセスを落とさない要素だけになる。モジュールが落ちない限り失敗は後続のパスワード認証に流れるので、不具合で sudo が通らず setup もできなくなる事態を避けられる
-- `pam-passkey` バイナリが無い / 起動できない / 置き場の検査に通らない場合、モジュールは remote 側だけ諦めて Touch ID を出す (状況ごとの動作は [DR-0012](./DR-0012-auth-state-transitions.md))
-- 置き場がユーザ所有だと、同じ uid のプロセスが `pam-passkey` バイナリを差し替えて次の認証で root として起動させられる。所有権の要件はこれを塞ぐためのもので、バイナリのコード署名の検査では代わりにならない (検査から exec までの間に差し替えられる)
+- `pam-passkey` バイナリが無い / 起動できない / 置き場の検査か spawn 後の署名の検査に通らない場合、モジュールは remote 側だけ諦めて Touch ID を出す (状況ごとの動作は [DR-0012](./DR-0012-auth-state-transitions.md))
+- 置き場がユーザ所有だと、同じ uid のプロセスが `pam-passkey` バイナリを差し替えて次の認証で root として起動させられる。所有権の要件はこれを塞ぐためのもので、コード署名の検査では代わりにならない (spawn 前のファイルの検査は exec までの間に差し替えられ、spawn 後の pid の検査の時点では差し替えたコードが root で動き始めている)
 - nix-darwin のように置き場が store パスになる配布では、モジュール引数 `helper=` に store パスを渡す
 
 ## 関連

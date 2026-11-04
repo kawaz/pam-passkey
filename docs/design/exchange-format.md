@@ -20,6 +20,7 @@
 | `details` | 要求の詳細 (下表) |
 | `nonce` | 要求 ID ([helper-protocol](./helper-protocol.md)) |
 | `expires` | 要求の期限。PAM が決めて helper に渡した値 ([helper-protocol](./helper-protocol.md)) |
+| `allow_credentials` | `PAM_USER` の登録済み credential id の配列。ページは `allowCredentials` に渡す |
 | `assertion_put_url` | assertion を PUT する presigned URL |
 | `result_get_url` | result を GET する presigned URL |
 
@@ -82,7 +83,7 @@
 
 ### JWS (login keychain の passkey の項目)
 
-- 署名アルゴリズムは ES256。署名鍵と公開鍵は P-256 の JWK
+- 署名アルゴリズムは Ed25519 (JWS の `alg` は `Ed25519`)。署名鍵と公開鍵は `kty: OKP` / `crv: Ed25519` の JWK
 - ペイロードの中身は [DR-0011](../decisions/DR-0011-user-keychain-signed-records.md)
 
 ### サイズ上限
