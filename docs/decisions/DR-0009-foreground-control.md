@@ -12,7 +12,7 @@ sudo のプロセスツリー (ppid) を辿って得られる起動元は「sudo
 ## Decision
 
 - 前面制御は、helper が承認ページを開いた時 (開き方は [DR-0004](./DR-0004-fallback-button-as-details.md)) にそのブラウザを activate することと、出し直したダイアログの後にブラウザをもう一度 activate することだけにする
-- 「詳細を確認」の後の前面はブラウザが取る。順序は、helper の子が承認ページを開いてブラウザを activate → PAM がダイアログを出し直す → 出し直した後に helper の子がブラウザをもう一度 activate する ([helper-protocol](../design/helper-protocol.md) の `reactivate`)。`LAContext` に前面制御の API は無いので、前面の調整は helper 側で行う
+- 「詳細を確認」の後の前面はブラウザが取る。順序は、PAM がダイアログを出し直す → helper の子が承認ページを開いてブラウザを activate → ダイアログの表示がブラウザより遅れた場合の保険として、PAM が続けて `reactivate` を送り helper の子がブラウザをもう一度 activate する ([helper-protocol](../design/helper-protocol.md))。`LAContext` に前面制御の API は無いので、前面の調整は helper 側で行う
 - 承認後に起動元 terminal へ前面を戻す処理はしない
 
 ## 不採用案と理由

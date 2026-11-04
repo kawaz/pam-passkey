@@ -13,7 +13,7 @@ PAM モジュール内からはブラウザを開けず ([DR-0003](./DR-0003-hel
 
 - LAContext の fallback ボタンを `localizedFallbackTitle` で「詳細を確認」に差し替える
 - policy は `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion` (生体 / companion のみの系) にする。この系では fallback がパスワード入力に行かず、押下は `LAErrorUserFallback` (-3) で返る
-- 押されると `LAContext` の評価は `-3` で返り、ダイアログは閉じる。PAM は helper に `open` を送って承認ページを開かせ、続けて新しい `LAContext` でダイアログを出し直し、Touch ID と remote の両方が使える状態に戻す。押すたびに同じことをする。Mac でも iCloud 同期された同じ passkey で署名できる
+- 押されると `LAContext` の評価は `-3` で返り、ダイアログは閉じる。PAM は新しい `LAContext` でダイアログを出し直してから helper に `open` を送って承認ページを開かせ、Touch ID と remote の両方が使える状態に戻す。押すたびに同じことをする。Mac でも iCloud 同期された同じ passkey で署名できる
 - 開く処理は、`PAM_USER` に永久降格した子 ([DR-0003](./DR-0003-helper-outside-sudo.md)) が `NSWorkspace` / `LSOpenCFURLRef` 相当を直接呼んで行う。`/usr/bin/open <URL>` は exec しない。承認 URL をプロセスの argv に出さないためで、argv は `ps` で他ユーザからも読める
 
 ## 不採用案と理由
