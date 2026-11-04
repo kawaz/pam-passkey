@@ -3,7 +3,7 @@ title: Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0011) 
 status: open
 category: task
 created: 2026-11-02T22:07:30+09:00
-last_read:
+last_read: 2026-11-04T12:32:27+09:00
 open_entered: 2026-11-02T22:07:30+09:00
 wip_entered:
 blocked_entered:
