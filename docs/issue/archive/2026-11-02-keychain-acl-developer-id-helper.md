@@ -1,6 +1,6 @@
 ---
 title: Keychain ACL を Developer ID 署名の helper に絞る設計 (DR-0011) の実機検証
-status: open
+status: resolved
 category: task
 created: 2026-11-02T22:07:30+09:00
 last_read: 2026-11-04T12:32:27+09:00
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T01:47:32+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["finding/2026-11-06-keychain-acl-developer-id","done:実機観測済み。同 Team ID の別 identifier / 再ビルド後 / System Keychain 側は未観測で実装中に拾う"]
 blocked_by:
 origin: 自リポ TODO
 ---
