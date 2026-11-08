@@ -1,24 +1,47 @@
-use libc::{c_char, c_int, c_void};
-use std::ffi::{CStr, CString};
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::process::CommandExt;
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::ptr;
+//! `pam_passkey.so`: Touch ID and remote approval in parallel (DR-0002), decided by the
+//! DR-0012 state table. Remote approval itself lives in the helper (DR-0003).
 
+mod helper;
+mod machine;
+mod process;
+mod touch_id;
+
+use libc::{c_char, c_int, c_void, uid_t};
+use machine::{Action, Input, Machine, Outcome};
+use protocol::encoding::{base64url, format_utc};
+use protocol::{HelperCommand, HelperEvent, HelperInput, RequestDetails};
+use std::ffi::{CStr, CString};
+use std::path::Path;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use touch_id::{LA_USER_CANCEL, LA_USER_FALLBACK, Report as TouchReport, Round};
+
+// Values and layouts from the macOS SDK's security/pam_{appl,constants,types}.h.
 const PAM_SUCCESS: c_int = 0;
+const PAM_AUTH_ERR: c_int = 9;
 const PAM_IGNORE: c_int = 25;
+const PAM_SILENT: c_int = i32::MIN;
 const PAM_TEXT_INFO: c_int = 4;
+const PAM_SERVICE: c_int = 1;
+const PAM_TTY: c_int = 3;
 const PAM_CONV: c_int = 5;
 const PAM_MAX_MSG_SIZE: usize = 512;
+
 const DEFAULT_HELPER: &str = "/usr/local/libexec/pam-passkey";
+/// Request lifetime (DESIGN 未決事項: 60–120 s, provisional default 90 s).
+const REQUEST_LIFETIME: Duration = Duration::from_secs(90);
+/// How long a cancelled dialog may take to close before the driver stops waiting for it.
+const DIALOG_CLOSE_GRACE: Duration = Duration::from_secs(5);
 
 #[link(name = "pam")]
 unsafe extern "C" {
     fn pam_get_user(pamh: *mut PamHandle, user: *mut *const c_char, prompt: *const c_char)
     -> c_int;
     fn pam_get_item(pamh: *const PamHandle, item_type: c_int, item: *mut *const c_void) -> c_int;
-    fn passkey_verify_pid(pid: c_int) -> c_int;
+}
+
+unsafe extern "C" {
+    fn passkey_gui_session_of(uid: uid_t) -> c_int;
 }
 
 #[repr(C)]
@@ -51,190 +74,435 @@ struct PamConv {
     appdata_ptr: *mut c_void,
 }
 
-fn secure_path(path: &Path) -> bool {
-    if !path.is_absolute() {
-        return false;
-    }
-    let mut current = Some(path);
-    while let Some(part) = current {
-        let Ok(metadata) = part.symlink_metadata() else {
-            return false;
-        };
-        if metadata.file_type().is_symlink() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0
-        {
-            return false;
-        }
-        if part == path && !metadata.is_file() || part != path && !metadata.is_dir() {
-            return false;
-        }
-        current = part.parent();
-    }
-    true
+enum Event {
+    Touch(TouchReport),
+    Helper(helper::Report),
 }
 
-unsafe fn inform(conv: &PamConv, text: &str) -> Option<()> {
-    let message = CString::new(text).ok()?;
-    if message.as_bytes_with_nul().len() > PAM_MAX_MSG_SIZE {
-        return None;
-    }
-    let item = PamMessage {
-        msg_style: PAM_TEXT_INFO,
-        msg: message.as_ptr().cast_mut(),
+/// Sends one `PAM_TEXT_INFO` message, split into messages of at most `PAM_MAX_MSG_SIZE` bytes.
+fn inform(conv: &PamConv, text: &str) {
+    let Some(send) = conv.conv else {
+        return;
     };
-    let items = [&item as *const PamMessage];
-    let mut response: *mut PamResponse = ptr::null_mut();
-    let send = conv.conv?;
-    // SAFETY: the message and pointer array remain alive throughout the synchronous callback.
-    let status = unsafe { send(1, items.as_ptr(), &mut response, conv.appdata_ptr) };
-    if !response.is_null() {
-        // SAFETY: OpenPAM's response allocations are free-compatible.
-        unsafe {
-            libc::free((*response).resp.cast());
-            libc::free(response.cast());
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let mut end = remaining.len().min(PAM_MAX_MSG_SIZE - 1);
+        while !remaining.is_char_boundary(end) {
+            end -= 1;
+        }
+        let Ok(message) = CString::new(&remaining[..end]) else {
+            return;
+        };
+        remaining = &remaining[end..];
+        let item = PamMessage {
+            msg_style: PAM_TEXT_INFO,
+            msg: message.as_ptr().cast_mut(),
+        };
+        let items = [&item as *const PamMessage];
+        let mut response: *mut PamResponse = std::ptr::null_mut();
+        // SAFETY: the message and pointer array remain alive throughout the synchronous callback.
+        let status = unsafe { send(1, items.as_ptr(), &mut response, conv.appdata_ptr) };
+        if !response.is_null() {
+            // SAFETY: OpenPAM's response allocations are free-compatible.
+            unsafe {
+                libc::free((*response).resp.cast());
+                libc::free(response.cast());
+            }
+        }
+        if status != PAM_SUCCESS {
+            return;
         }
     }
-    (status == PAM_SUCCESS).then_some(())
 }
 
-fn helper_path(argc: c_int, argv: *const *const c_char) -> Option<String> {
-    if argc < 0 || argc > 32 {
-        return None;
-    }
+/// The helper path from the module arguments: only `helper=<absolute path>` is accepted.
+/// `None` means the arguments are not understood, so remote cannot be used.
+fn helper_path(arguments: &[&str]) -> Option<String> {
     let mut path = DEFAULT_HELPER.to_owned();
-    if argc == 0 {
-        return Some(path);
-    }
-    if argv.is_null() {
-        return None;
-    }
-    for index in 0..argc as isize {
-        // SAFETY: OpenPAM supplies `argc` pointers in `argv` during the call.
-        let argument = unsafe { *argv.offset(index) };
-        if argument.is_null() {
+    for argument in arguments {
+        let selected = argument.strip_prefix("helper=")?;
+        if !selected.starts_with('/') {
             return None;
         }
-        // SAFETY: OpenPAM supplies NUL-terminated argument strings.
-        let value = unsafe { CStr::from_ptr(argument) }.to_str().ok()?;
-        if let Some(selected) = value.strip_prefix("helper=") {
-            if selected.is_empty() {
-                return None;
-            }
-            path = selected.to_owned();
-        } else {
-            return None;
-        }
+        path = selected.to_owned();
     }
     Some(path)
 }
 
-unsafe fn authenticate(
-    pamh: *mut PamHandle,
-    argc: c_int,
-    argv: *const *const c_char,
-) -> Option<()> {
-    if pamh.is_null() {
+fn module_arguments<'a>(argc: c_int, argv: *const *const c_char) -> Option<Vec<&'a str>> {
+    let count = usize::try_from(argc).ok().filter(|count| *count <= 32)?;
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    if argv.is_null() {
         return None;
     }
-    let mut item: *const c_void = ptr::null();
-    // SAFETY: PAM owns this conversation object throughout the call.
-    if unsafe { pam_get_item(pamh, PAM_CONV, &mut item) } != PAM_SUCCESS || item.is_null() {
-        return None;
-    }
-    // SAFETY: PAM_CONV denotes an OpenPAM-owned conversation object.
-    let conv = unsafe { &*item.cast::<PamConv>() };
-    let message = match unsafe { probe(pamh, argc, argv) } {
-        Ok(message) => message,
-        Err(stage) => format!("pam-passkey probe: failed at {stage}"),
-    };
-    // SAFETY: OpenPAM conversation is live for the duration of the callback.
-    unsafe { inform(conv, &message) }
+    (0..count)
+        .map(|index| {
+            // SAFETY: OpenPAM supplies `argc` pointers in `argv` for the duration of the call.
+            let argument = unsafe { *argv.add(index) };
+            if argument.is_null() {
+                return None;
+            }
+            // SAFETY: OpenPAM supplies NUL-terminated argument strings.
+            unsafe { CStr::from_ptr(argument) }.to_str().ok()
+        })
+        .collect()
 }
 
-unsafe fn probe(
-    pamh: *mut PamHandle,
-    argc: c_int,
-    argv: *const *const c_char,
-) -> Result<String, &'static str> {
-    let mut user: *const c_char = ptr::null();
-    // SAFETY: PAM owns the handle and returned C string for this call.
-    if unsafe { pam_get_user(pamh, &mut user, ptr::null()) } != PAM_SUCCESS || user.is_null() {
-        return Err("pam_get_user");
+fn pam_string(pamh: *mut PamHandle, item_type: c_int) -> Option<String> {
+    let mut item: *const c_void = std::ptr::null();
+    // SAFETY: PAM owns the handle and the returned string for this call.
+    if unsafe { pam_get_item(pamh, item_type, &mut item) } != PAM_SUCCESS || item.is_null() {
+        return None;
     }
-    // SAFETY: PAM retains `user` until the authenticate callback returns.
-    let user = unsafe { CStr::from_ptr(user) }
-        .to_str()
-        .map_err(|_| "user utf8")?;
-    if user.contains('/') || user.is_empty() {
-        return Err("user name");
-    }
-    let path = helper_path(argc, argv).ok_or("helper_path")?;
-    if !secure_path(Path::new(&path)) {
-        return Err("secure_path");
-    }
-    let mut command = Command::new(path);
-    command
-        .arg("_probe-auth")
-        .arg(user)
-        .env_clear()
-        .current_dir("/")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // SAFETY: the callback calls only async-signal-safe functions between fork and exec.
+    // SAFETY: string items are NUL-terminated C strings owned by PAM.
+    let text = unsafe { CStr::from_ptr(item.cast::<c_char>()) };
+    text.to_str().ok().map(str::to_owned)
+}
+
+/// uid of a user name from the user database.
+fn uid_of(user: &str) -> Option<uid_t> {
+    let name = CString::new(user).ok()?;
+    // SAFETY: getpwnam_r writes into the provided struct and buffer only.
     unsafe {
-        command.pre_exec(|| {
-            libc::umask(0o077);
-            Ok(())
-        });
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut storage = vec![0u8; 16384];
+        let mut result = std::ptr::null_mut();
+        let rc = libc::getpwnam_r(
+            name.as_ptr(),
+            &mut pwd,
+            storage.as_mut_ptr().cast(),
+            storage.len(),
+            &mut result,
+        );
+        (rc == 0 && !result.is_null()).then_some(pwd.pw_uid)
     }
-    let mut child = command.spawn().map_err(|_| "spawn")?;
-    // SAFETY: the PID belongs to our freshly spawned child, checked before releasing the handshake byte.
-    let verify = unsafe { passkey_verify_pid(child.id() as c_int) };
-    if verify != 0 {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Ok(format!(
-            "pam-passkey probe: failed at verify_pid (status {verify})"
-        ));
+}
+
+fn host_name() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: gethostname writes at most the buffer length.
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return String::new();
     }
-    use std::io::Write;
-    child
-        .stdin
-        .as_mut()
-        .ok_or("stdin")?
-        .write_all(&[1])
-        .map_err(|_| "handshake")?;
-    child.stdin.take();
-    let output = child.wait_with_output().map_err(|_| "wait")?;
-    Ok(if output.status.success() {
-        format!(
-            "pam-passkey probe: {} bytes of user Keychain data",
-            output.stdout.len()
-        )
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
+}
+
+fn request_id() -> String {
+    let mut bytes = [0u8; 16];
+    // SAFETY: arc4random_buf fills exactly the given length.
+    unsafe { libc::arc4random_buf(bytes.as_mut_ptr().cast(), bytes.len()) };
+    base64url(&bytes)
+}
+
+/// How Touch ID runs for this request (DR-0012): `None` if it cannot be used,
+/// `Some(Some(uid))` to evaluate with the euid dropped to PAM_USER, `Some(None)` to evaluate as is.
+fn touch_plan(pam_uid: uid_t) -> Option<Option<uid_t>> {
+    // SAFETY: the session shim only reads the caller's own security and audit session.
+    if unsafe { passkey_gui_session_of(pam_uid) } != 1 {
+        return None;
+    }
+    // SAFETY: getuid / geteuid have no preconditions.
+    let (uid, euid) = unsafe { (libc::getuid(), libc::geteuid()) };
+    if euid == 0 {
+        // A root PAM_USER has no enrolled biometry; canEvaluatePolicy reports that.
+        Some((pam_uid != 0).then_some(pam_uid))
+    } else if euid == pam_uid && uid == pam_uid {
+        Some(None)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr: String = stderr
-            .chars()
-            .filter(|c| !c.is_control())
-            .take(300)
-            .collect();
-        format!(
-            "pam-passkey probe: user Keychain child returned {:?}: {stderr}",
-            output.status.code()
-        )
+        None
+    }
+}
+
+fn touch_input(answer: Option<libc::c_long>, restored: bool) -> Input {
+    if !restored {
+        return Input::EuidNotRestored;
+    }
+    match answer {
+        None => Input::TouchUnavailable,
+        Some(0) => Input::TouchSucceeded,
+        Some(LA_USER_FALLBACK) => Input::TouchFallback,
+        Some(LA_USER_CANCEL) => Input::TouchCancelled,
+        Some(_) => Input::TouchFailed,
+    }
+}
+
+fn helper_input(id: &str, event: helper::Report) -> Option<Input> {
+    use helper::Report;
+    Some(match event {
+        Report::Event(HelperEvent::Unavailable { .. }) => Input::RemoteUnavailable,
+        Report::Event(HelperEvent::Result { id: answered, pass }) => {
+            if pass && answered == id {
+                Input::RemotePassed
+            } else {
+                Input::RemoteFailed
+            }
+        }
+        Report::Event(HelperEvent::Url { .. }) => return None,
+        Report::Malformed | Report::Closed => Input::RemoteFailed,
+        Report::WriteFailed {
+            command: Some(HelperCommand::Open | HelperCommand::Reactivate),
+        } => Input::OpenFailed,
+        Report::WriteFailed { .. } => Input::RemoteFailed,
     })
 }
 
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn pam_sm_authenticate(
+struct Driver {
+    events: Receiver<Event>,
+    sender: Sender<Event>,
+    machine: Machine,
+    round: Option<Round>,
+    /// A round has started and its `Ended` report has not arrived yet.
+    round_live: bool,
+    /// `open` / `reactivate` are due once the re-shown dialog is up.
+    open_due: bool,
+    helper: Option<helper::Helper>,
+    plan: Option<Option<uid_t>>,
+    reason: CString,
+    id: String,
+    deadline: Instant,
+    conv: Option<*const PamConv>,
+}
+
+impl Driver {
+    fn start_round(&mut self) {
+        let Some(plan) = self.plan else {
+            return;
+        };
+        let sender = self.sender.clone();
+        self.round = Some(Round::start(plan, self.reason.clone(), move |report| {
+            let _ = sender.send(Event::Touch(report));
+        }));
+        self.round_live = true;
+    }
+
+    fn run(mut self) -> c_int {
+        let mut action = self.machine.initial();
+        let outcome = loop {
+            match action {
+                Action::Finish(outcome) => break outcome,
+                Action::Reshow => {
+                    self.start_round();
+                    self.open_due = true;
+                }
+                Action::Wait => {}
+            }
+            let remaining = self.deadline.saturating_duration_since(Instant::now());
+            action = match self.events.recv_timeout(remaining) {
+                Ok(event) => match self.input(event) {
+                    Some(input) => self.machine.on(input),
+                    None => Action::Wait,
+                },
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+                    self.machine.on(Input::Expired)
+                }
+            };
+        };
+        self.finish(outcome)
+    }
+
+    fn input(&mut self, event: Event) -> Option<Input> {
+        match event {
+            Event::Touch(TouchReport::Started) => {
+                if std::mem::take(&mut self.open_due)
+                    && let Some(helper) = &self.helper
+                {
+                    helper.send(HelperCommand::Open);
+                    helper.send(HelperCommand::Reactivate);
+                }
+                None
+            }
+            Event::Touch(TouchReport::Ended { answer, restored }) => {
+                self.round_live = false;
+                Some(touch_input(answer, restored))
+            }
+            Event::Helper(helper::Report::Event(HelperEvent::Url { url })) => {
+                if let Some(conv) = self.conv {
+                    // SAFETY: the conversation belongs to the ongoing pam_sm_authenticate call.
+                    inform(unsafe { &*conv }, &format!("pam-passkey: 承認 URL: {url}"));
+                }
+                None
+            }
+            Event::Helper(report) => helper_input(&self.id, report),
+        }
+    }
+
+    /// Stops the dialog, tells the helper the conclusion and returns the PAM result.
+    fn finish(self, outcome: Outcome) -> c_int {
+        let mut outcome = outcome;
+        if self.round_live
+            && let Some(round) = &self.round
+        {
+            round.cancel();
+            let until = Instant::now() + DIALOG_CLOSE_GRACE;
+            let mut ended = None;
+            while let Ok(event) = self
+                .events
+                .recv_timeout(until.saturating_duration_since(Instant::now()))
+            {
+                if let Event::Touch(TouchReport::Ended { restored, .. }) = event {
+                    ended = Some(restored);
+                    break;
+                }
+            }
+            match ended {
+                Some(true) => {}
+                Some(false) => outcome = Outcome::AuthErr,
+                None => {
+                    // The round may still hold the dropped euid. pam_sm_authenticate takes it
+                    // back; the abandoned round must not touch the euid after we return.
+                    round.abandon();
+                    outcome = Outcome::AuthErr;
+                }
+            }
+        }
+        // The helper's input is closed when `self` (and the helper in it) drops on return, after
+        // the queued lines: `finish` for a Touch ID success, otherwise the close means cancel.
+        if outcome == Outcome::TouchSuccess
+            && let Some(helper) = &self.helper
+        {
+            helper.send(HelperCommand::Finish { pass: true });
+        }
+        match outcome {
+            Outcome::TouchSuccess | Outcome::RemoteSuccess => PAM_SUCCESS,
+            Outcome::AuthErr => PAM_AUTH_ERR,
+            Outcome::Ignore => PAM_IGNORE,
+        }
+    }
+}
+
+/// # Safety
+/// `pamh` must be the handle OpenPAM passed to `pam_sm_authenticate`.
+unsafe fn authenticate(
     pamh: *mut PamHandle,
-    _flags: c_int,
+    flags: c_int,
     argc: c_int,
     argv: *const *const c_char,
 ) -> c_int {
-    // Verification-only module: a probe must never authenticate a caller.
-    let _ = std::panic::catch_unwind(|| unsafe { authenticate(pamh, argc, argv) });
-    PAM_IGNORE
+    if pamh.is_null() {
+        return PAM_IGNORE;
+    }
+    // 1. PAM_USER, its uid and whether it has the GUI session.
+    let mut user: *const c_char = std::ptr::null();
+    // SAFETY: PAM owns the handle and the returned string for this call.
+    if unsafe { pam_get_user(pamh, &mut user, std::ptr::null()) } != PAM_SUCCESS || user.is_null() {
+        return PAM_IGNORE;
+    }
+    // SAFETY: PAM keeps `user` alive until the authenticate callback returns.
+    let Ok(user) = unsafe { CStr::from_ptr(user) }.to_str() else {
+        return PAM_IGNORE;
+    };
+    if user.is_empty() || user.contains('/') {
+        return PAM_IGNORE;
+    }
+    let user = user.to_owned();
+    let Some(pam_uid) = uid_of(&user) else {
+        return PAM_IGNORE;
+    };
+    let plan = touch_plan(pam_uid);
+
+    // 2. Process information, while the euid is still the caller's.
+    let processes = process::ancestry();
+    let argv_text = processes
+        .first()
+        .and_then(|own| own.argv.clone())
+        .unwrap_or_default();
+    let service = pam_string(pamh, PAM_SERVICE).unwrap_or_else(|| "pam-passkey".to_owned());
+    let tty = pam_string(pamh, PAM_TTY);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    let id = request_id();
+    // SAFETY: getuid has no preconditions.
+    let caller_uid = unsafe { libc::getuid() };
+    let input = HelperInput {
+        user: user.clone(),
+        caller_uid,
+        id: id.clone(),
+        expires: format_utc(now + REQUEST_LIFETIME.as_secs() as i64),
+        tty: tty.clone(),
+        details: RequestDetails {
+            host: host_name(),
+            user,
+            caller_uid,
+            tty,
+            time: format_utc(now),
+            argv: argv_text.clone(),
+            processes,
+        },
+    };
+    let deadline = Instant::now() + REQUEST_LIFETIME;
+
+    // 3. Helper: placement check, spawn, signature check, input line.
+    let (sender, events) = channel();
+    let helper = module_arguments(argc, argv)
+        .and_then(|arguments| helper_path(&arguments))
+        .and_then(|path| {
+            let sender = sender.clone();
+            helper::spawn(Path::new(&path), &input, deadline, move |report| {
+                let _ = sender.send(Event::Helper(report));
+            })
+            .ok()
+        });
+
+    // 4. Touch ID, with the euid dropped only after the spawn above.
+    let mut conv: *const c_void = std::ptr::null();
+    // SAFETY: PAM owns the conversation object throughout the call.
+    let conv = (unsafe { pam_get_item(pamh, PAM_CONV, &mut conv) } == PAM_SUCCESS
+        && !conv.is_null()
+        && flags & PAM_SILENT == 0)
+        .then_some(conv.cast::<PamConv>());
+    let reason = CString::new(touch_id::reason(&argv_text, &service))
+        .unwrap_or_else(|_| c"pam-passkey".to_owned());
+    let mut driver = Driver {
+        events,
+        sender,
+        machine: Machine::new(plan.is_some(), helper.is_some()),
+        round: None,
+        round_live: false,
+        open_due: false,
+        helper,
+        plan,
+        reason,
+        id,
+        deadline,
+        conv,
+    };
+    driver.start_round();
+    // 5. One loop over both paths until the state table concludes.
+    driver.run()
+}
+
+/// PAM auth entry point. Panics are caught and become `PAM_AUTH_ERR`; every failure is
+/// `PAM_AUTH_ERR` or `PAM_IGNORE`, which fall through to the next module (password).
+///
+/// # Safety
+/// Called by OpenPAM with its handle and the module arguments from the policy line.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pam_sm_authenticate(
+    pamh: *mut PamHandle,
+    flags: c_int,
+    argc: c_int,
+    argv: *const *const c_char,
+) -> c_int {
+    // SAFETY: geteuid has no preconditions.
+    let caller_euid = unsafe { libc::geteuid() };
+    let result = std::panic::catch_unwind(|| unsafe { authenticate(pamh, flags, argc, argv) })
+        .unwrap_or(PAM_AUTH_ERR);
+    // A dialog that did not close in time (or a panic) can leave the euid dropped. Take it back,
+    // and since the evaluation did not end cleanly, do not authenticate (DR-0012 seteuid の順序).
+    // SAFETY: geteuid / seteuid have no memory preconditions.
+    if unsafe { libc::geteuid() } != caller_euid {
+        let _ = unsafe { libc::seteuid(caller_euid) };
+        return PAM_AUTH_ERR;
+    }
+    result
 }
 
 #[unsafe(no_mangle)]
@@ -251,9 +519,71 @@ pub extern "C" fn pam_sm_setcred(
 mod tests {
     use super::*;
 
-    // A helper path is trusted only if every component, including / and the binary, is root-owned and non-writable by others; symlinks cannot bypass this check.
+    // Only `helper=<absolute path>` is understood; anything else must not silently pick a binary.
     #[test]
-    fn rejects_relative_paths() {
-        assert!(!secure_path(Path::new("target/release/pam-passkey")));
+    fn module_arguments_select_only_absolute_helpers() {
+        assert_eq!(helper_path(&[]).as_deref(), Some(DEFAULT_HELPER));
+        assert_eq!(
+            helper_path(&["helper=/nix/store/x/bin/pam-passkey"]).as_deref(),
+            Some("/nix/store/x/bin/pam-passkey")
+        );
+        assert_eq!(helper_path(&["helper=pam-passkey"]), None);
+        assert_eq!(helper_path(&["helper="]), None);
+        assert_eq!(helper_path(&["debug"]), None);
+    }
+
+    // DR-0012 helper の成功判定: only `pass: true` for our own request ID is success.
+    #[test]
+    fn only_matching_pass_result_is_remote_success() {
+        let result = |id: &str, pass| {
+            helper_input(
+                "ours",
+                helper::Report::Event(HelperEvent::Result {
+                    id: id.into(),
+                    pass,
+                }),
+            )
+        };
+        assert_eq!(result("ours", true), Some(Input::RemotePassed));
+        assert_eq!(result("ours", false), Some(Input::RemoteFailed));
+        assert_eq!(result("other", true), Some(Input::RemoteFailed));
+        assert_eq!(
+            helper_input("ours", helper::Report::Malformed),
+            Some(Input::RemoteFailed)
+        );
+        assert_eq!(
+            helper_input("ours", helper::Report::Closed),
+            Some(Input::RemoteFailed)
+        );
+    }
+
+    // The helper failing to take `open` is the "remote cannot open the page" case of DR-0012.
+    #[test]
+    fn failed_open_write_is_open_failure() {
+        assert_eq!(
+            helper_input(
+                "ours",
+                helper::Report::WriteFailed {
+                    command: Some(HelperCommand::Open)
+                }
+            ),
+            Some(Input::OpenFailed)
+        );
+        assert_eq!(
+            helper_input("ours", helper::Report::WriteFailed { command: None }),
+            Some(Input::RemoteFailed)
+        );
+    }
+
+    // LAError codes map onto the state table inputs; an unrestored euid overrides any answer.
+    #[test]
+    fn touch_answers_map_to_inputs() {
+        assert_eq!(touch_input(Some(0), true), Input::TouchSucceeded);
+        assert_eq!(touch_input(Some(-3), true), Input::TouchFallback);
+        assert_eq!(touch_input(Some(-2), true), Input::TouchCancelled);
+        assert_eq!(touch_input(Some(-1), true), Input::TouchFailed);
+        assert_eq!(touch_input(Some(-8), true), Input::TouchFailed);
+        assert_eq!(touch_input(None, true), Input::TouchUnavailable);
+        assert_eq!(touch_input(Some(0), false), Input::EuidNotRestored);
     }
 }

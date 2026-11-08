@@ -68,6 +68,7 @@ dependencies = [
  "protocol",
  "security-framework",
  "security-framework-sys",
+ "serde_json",
 ]
 
 [[package]]
@@ -76,6 +77,8 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "libc",
+ "protocol",
+ "serde_json",
 ]
 
 [[package]]
