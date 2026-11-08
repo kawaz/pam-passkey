@@ -135,20 +135,6 @@ unsafe fn authenticate(
     if pamh.is_null() {
         return None;
     }
-    let mut user: *const c_char = ptr::null();
-    // SAFETY: PAM owns the handle and returned C string for this call.
-    if unsafe { pam_get_user(pamh, &mut user, ptr::null()) } != PAM_SUCCESS || user.is_null() {
-        return None;
-    }
-    // SAFETY: PAM retains `user` until the authenticate callback returns.
-    let user = unsafe { CStr::from_ptr(user) }.to_str().ok()?;
-    if user.contains('/') || user.is_empty() {
-        return None;
-    }
-    let path = helper_path(argc, argv)?;
-    if !secure_path(Path::new(&path)) {
-        return None;
-    }
     let mut item: *const c_void = ptr::null();
     // SAFETY: PAM owns this conversation object throughout the call.
     if unsafe { pam_get_item(pamh, PAM_CONV, &mut item) } != PAM_SUCCESS || item.is_null() {
@@ -156,6 +142,35 @@ unsafe fn authenticate(
     }
     // SAFETY: PAM_CONV denotes an OpenPAM-owned conversation object.
     let conv = unsafe { &*item.cast::<PamConv>() };
+    let message = match unsafe { probe(pamh, argc, argv) } {
+        Ok(message) => message,
+        Err(stage) => format!("pam-passkey probe: failed at {stage}"),
+    };
+    // SAFETY: OpenPAM conversation is live for the duration of the callback.
+    unsafe { inform(conv, &message) }
+}
+
+unsafe fn probe(
+    pamh: *mut PamHandle,
+    argc: c_int,
+    argv: *const *const c_char,
+) -> Result<String, &'static str> {
+    let mut user: *const c_char = ptr::null();
+    // SAFETY: PAM owns the handle and returned C string for this call.
+    if unsafe { pam_get_user(pamh, &mut user, ptr::null()) } != PAM_SUCCESS || user.is_null() {
+        return Err("pam_get_user");
+    }
+    // SAFETY: PAM retains `user` until the authenticate callback returns.
+    let user = unsafe { CStr::from_ptr(user) }
+        .to_str()
+        .map_err(|_| "user utf8")?;
+    if user.contains('/') || user.is_empty() {
+        return Err("user name");
+    }
+    let path = helper_path(argc, argv).ok_or("helper_path")?;
+    if !secure_path(Path::new(&path)) {
+        return Err("secure_path");
+    }
     let mut command = Command::new(path);
     command
         .arg("_probe-auth")
@@ -164,42 +179,50 @@ unsafe fn authenticate(
         .current_dir("/")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     // SAFETY: the callback calls only async-signal-safe functions between fork and exec.
     unsafe {
         command.pre_exec(|| {
             libc::umask(0o077);
-            for fd in 3..libc::getdtablesize() {
-                libc::close(fd);
-            }
             Ok(())
         });
     }
-    let mut child = command.spawn().ok()?;
+    let mut child = command.spawn().map_err(|_| "spawn")?;
     // SAFETY: the PID belongs to our freshly spawned child, checked before releasing the handshake byte.
-    if unsafe { passkey_verify_pid(child.id() as c_int) } != 1 {
+    let verify = unsafe { passkey_verify_pid(child.id() as c_int) };
+    if verify != 0 {
         let _ = child.kill();
         let _ = child.wait();
-        return None;
+        return Ok(format!(
+            "pam-passkey probe: failed at verify_pid (status {verify})"
+        ));
     }
     use std::io::Write;
-    child.stdin.as_mut()?.write_all(&[1]).ok()?;
+    child
+        .stdin
+        .as_mut()
+        .ok_or("stdin")?
+        .write_all(&[1])
+        .map_err(|_| "handshake")?;
     child.stdin.take();
-    let output = child.wait_with_output().ok()?;
-    let message = if output.status.success() {
+    let output = child.wait_with_output().map_err(|_| "wait")?;
+    Ok(if output.status.success() {
         format!(
             "pam-passkey probe: {} bytes of user Keychain data",
             output.stdout.len()
         )
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr: String = stderr
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(300)
+            .collect();
         format!(
-            "pam-passkey probe: user Keychain child returned {:?}",
+            "pam-passkey probe: user Keychain child returned {:?}: {stderr}",
             output.status.code()
         )
-    };
-    // SAFETY: OpenPAM conversation is live for the duration of the callback.
-    let _ = unsafe { inform(conv, &message) };
-    Some(())
+    })
 }
 
 #[unsafe(no_mangle)]

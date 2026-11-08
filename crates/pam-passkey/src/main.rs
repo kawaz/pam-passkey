@@ -77,7 +77,10 @@ fn user_identity(
         {
             return Err("target user has more than 256 supplemental groups".into());
         }
-        let gids: Vec<libc::gid_t> = groups[..usize::try_from(count)?]
+        // setgroups rejects more than NGROUPS_MAX entries; getgrouplist may return more.
+        // NGROUPS_MAX is 16 on macOS (sys/syslimits.h).
+        let count = usize::try_from(count)?.min(16);
+        let gids: Vec<libc::gid_t> = groups[..count]
             .iter()
             .map(|group| u32::try_from(*group))
             .collect::<Result<_, _>>()?;
@@ -116,13 +119,12 @@ fn permanently_drop(
 
 fn clean_child(command: &mut Command) -> &mut Command {
     command.env_clear().current_dir("/");
+    // Rust opens every descriptor with CLOEXEC, so nothing beyond the configured stdio survives exec.
+    // Closing descriptors here would also close the pipe Rust uses to report exec failures.
     // SAFETY: pre_exec executes only async-signal-safe libc calls after fork, before exec.
     unsafe {
         command.pre_exec(|| {
             libc::umask(0o077);
-            for fd in 3..libc::getdtablesize() {
-                libc::close(fd);
-            }
             Ok(())
         });
     }
@@ -146,7 +148,7 @@ fn root_probe_helper(user: &str) -> Result<(), Box<dyn Error>> {
         .arg(user)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     if unsafe { libc::geteuid() } == 0 {
         let (uid, gid, groups) = user_identity(user)?;
         // SAFETY: all user and group lookups run above in the parent; pre_exec uses only libc syscalls.
@@ -156,7 +158,12 @@ fn root_probe_helper(user: &str) -> Result<(), Box<dyn Error>> {
     }
     let output = command.output()?;
     if !output.status.success() {
-        return Err(format!("user Keychain child failed: {:?}", output.status.code()).into());
+        return Err(format!(
+            "user Keychain child failed: {:?}: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
     }
     // Forward only the fixed probe value, never any production Keychain item.
     std::io::stdout().write_all(&output.stdout)?;
