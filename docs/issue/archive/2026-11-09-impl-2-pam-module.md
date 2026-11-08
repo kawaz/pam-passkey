@@ -1,6 +1,6 @@
 ---
 title: 実装 ② PAM モジュール本体 (LAContext + helper spawn + helper-protocol + DR-0012 の状態遷移)
-status: open
+status: resolved
 category: task
 created: 2026-11-09T01:48:54+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T02:42:31+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["implemented","finding/2026-11-09-pam-module-touch-id-path"]
 blocked_by:
 origin: 自リポ TODO
 ---
