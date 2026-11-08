@@ -36,7 +36,10 @@
 | `authenticatorData.rpIdHash` | `SHA-256(rp_id)` と一致する |
 | `authenticatorData` の flags | UP、UV、AT (attested credential data あり) が立っている |
 | 公開鍵の COSE alg | ES256 (`-7`) だけを受け入れる |
-| credential id の長さ | 上限を超えない |
+| credential id の長さ | 1 以上 1023 バイト以下 (WebAuthn の credentialIdLength の上限) |
+| credential id の一致 | credential オブジェクトの `credential_id` が authenticatorData の attested credential data の id と一致する |
+| authenticatorData の形 | attested credential data (と ED が立っていれば extensions) で末尾まで過不足なく読める |
+| attestation statement | 検証しない (`fmt` / `attStmt` は見ない)。credential は challenge・origin・capability URL で登録要求に束縛される |
 | BE / BS フラグ | 同期される passkey (BE が立つもの) も受け入れる。値は登録時に JWS のペイロードに記録する |
 | challenge の使用回数 | 1 回限り。credential を受け取って判定したら、その登録要求の待ちを破棄する |
 | 期限 | 登録ペイロードの `expires` 内。判定は Mac の時計で `add` が行う |

@@ -13,6 +13,7 @@ use url::Url;
 /// Upper bounds of the objects (exchange-format サイズ上限).
 pub const MAX_REQUEST: usize = 64 * 1024;
 pub const MAX_ASSERTION: usize = 16 * 1024;
+pub const MAX_CREDENTIAL: usize = 16 * 1024;
 
 /// Our own requests are signed for this long: they are sent right after signing.
 const OWN_REQUEST_VALIDITY: Duration = Duration::from_secs(60);

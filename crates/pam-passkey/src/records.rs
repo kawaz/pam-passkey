@@ -42,10 +42,6 @@ pub struct EcPublicJwk {
 }
 
 impl EcPublicJwk {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "add (実装 ③b) records the registered key")
-    )]
     pub fn from_key(key: &PasskeyKey) -> Self {
         let point = key.to_sec1_point(false);
         let bytes = point.as_bytes();
@@ -116,10 +112,6 @@ pub fn parse_verification_jwk(text: &str) -> Option<VerifyingKey> {
 }
 
 /// The System Keychain `signing_key` item; `x` must belong to `d`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "add (実装 ③b) reads the signing key")
-)]
 pub fn parse_signing_jwk(text: &str) -> Option<SigningKey> {
     let jwk: OkpJwk = serde_json::from_str(text).ok()?;
     if jwk.kty != "OKP" || jwk.crv != "Ed25519" {
@@ -139,7 +131,6 @@ struct FlattenedJws {
 }
 
 /// One JSONL line for `record`, signed with the System Keychain signing key.
-#[cfg_attr(not(test), expect(dead_code, reason = "add (実装 ③b) signs records"))]
 pub fn sign_record(key: &SigningKey, record: &PasskeyRecord) -> String {
     use ed25519_dalek::Signer;
     let protected = base64url(PROTECTED_HEADER.as_bytes());
@@ -166,6 +157,13 @@ pub fn verify_record(line: &str, key: &VerifyingKey) -> Option<PasskeyRecord> {
         &signature,
     )
     .ok()?;
+    serde_json::from_slice(&base64url_decode(&jws.payload)?).ok()
+}
+
+/// The payload of `line` without verifying its JWS, for `list` and `del` (DR-0010: list は JWS
+/// を検証しない). Nothing read this way decides an authentication.
+pub fn unverified_record(line: &str) -> Option<PasskeyRecord> {
+    let jws: FlattenedJws = serde_json::from_str(line).ok()?;
     serde_json::from_slice(&base64url_decode(&jws.payload)?).ok()
 }
 

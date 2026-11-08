@@ -5,11 +5,17 @@ fn main() {
     for source in [
         "src/keychain_acl.c",
         "src/browser.c",
+        "src/owner_auth.m",
         TOUCH_ID_SHIM,
         "build.rs",
     ] {
         println!("cargo:rerun-if-changed={source}");
     }
+    cc::Build::new()
+        .file("src/owner_auth.m")
+        .flag("-fobjc-arc")
+        .flag("-fblocks")
+        .compile("owner_auth");
     cc::Build::new()
         .file("src/keychain_acl.c")
         .warnings(false) // The legacy Keychain ACL APIs are deprecated but required for kSecAttrAccess.

@@ -1,5 +1,8 @@
+mod add;
 mod auth;
+mod cbor;
 mod child;
+mod passkeys;
 mod records;
 mod settings;
 mod setup;
@@ -20,6 +23,11 @@ const HELP: &str = "pam-passkey — passkey approval for PAM (sudo) from a phone
 Commands:
   setup [--module <path>] [page_url] Configure the approval page, the store and send_command
                                      (writes the System Keychain through sudo; see setup --help)
+  add [label]                        Register a passkey for yourself (asks for Touch ID or your
+                                     password, then shows or sends a registration URL; the label
+                                     defaults to the registration time)
+  list                               List your passkeys: label, credential id, registration time
+  del <label|id>                     Delete one of your passkeys by credential id or by label
 
 Commands (internal, started by pam_passkey.so, the helper itself or setup):
   setup --stdin                      Write the settings checked by setup (as root)
@@ -211,6 +219,10 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
         _ if args.iter().any(|arg| arg == "--help") => print!("{HELP}"),
         [command, rest @ ..] if command == "setup" => setup::run(rest)?,
+        [command] if command == "add" => add::run(None)?,
+        [command, label] if command == "add" => add::run(Some(label))?,
+        [command] if command == "list" => passkeys::list()?,
+        [command, target] if command == "del" => passkeys::del(target)?,
         [command] if command == "_auth" => auth::run()?,
         [command] if command == "_open-page" => browser(false)?,
         [command] if command == "_activate-browser" => browser(true)?,

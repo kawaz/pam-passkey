@@ -1,6 +1,7 @@
 //! Test doubles: an authenticator that signs like a passkey would (without a page or a
 //! browser), signed passkey records, and a throwaway MinIO server.
 
+use crate::cbor::{Value, encode};
 use crate::records::{EcPublicJwk, PasskeyRecord, sign_record};
 use crate::settings::Page;
 use p256::ecdsa::signature::Signer;
@@ -28,6 +29,99 @@ impl Authenticator {
 
     pub fn public_key(&self) -> VerifyingKey {
         *self.key.verifying_key()
+    }
+
+    /// The public key as the COSE_Key a passkey attests (EC2, P-256, ES256).
+    pub fn cose_key(&self) -> Vec<(Value, Value)> {
+        let point = self.public_key().to_sec1_point(false);
+        let bytes = point.as_bytes();
+        vec![
+            (Value::Integer(1), Value::Integer(2)),
+            (Value::Integer(3), Value::Integer(-7)),
+            (Value::Integer(-1), Value::Integer(1)),
+            (Value::Integer(-2), Value::Bytes(bytes[1..33].to_vec())),
+            (Value::Integer(-3), Value::Bytes(bytes[33..65].to_vec())),
+        ]
+    }
+}
+
+/// The parts of a credential (registration) before it is encoded. Every field starts out
+/// valid, for a synced passkey (BE and BS set).
+pub struct RegistrationDraft {
+    pub client_data: serde_json::Map<String, serde_json::Value>,
+    /// rpIdHash, flags and signCount: the fixed head of authenticatorData.
+    pub head: Vec<u8>,
+    /// The credential id inside authenticatorData.
+    pub attested_id: Vec<u8>,
+    /// The credential id the credential object names; `None` names `attested_id`.
+    pub named_id: Option<Vec<u8>>,
+    /// The COSE_Key entries, encoded in this order.
+    pub cose_key: Vec<(Value, Value)>,
+    /// Extensions after the key (set the ED flag in `head` to declare them).
+    pub extensions: Option<Value>,
+    /// Bytes after everything authenticatorData should hold.
+    pub trailing: Vec<u8>,
+    /// The attestation object as sent, replacing the encoded one.
+    pub attestation_object: Option<Vec<u8>>,
+}
+
+impl RegistrationDraft {
+    pub fn valid(authenticator: &Authenticator, registration: &[u8], page: &Page) -> Self {
+        let mut client_data = serde_json::Map::new();
+        client_data.insert("type".into(), "webauthn.create".into());
+        client_data.insert(
+            "challenge".into(),
+            base64url(&Sha256::digest(registration)).into(),
+        );
+        client_data.insert("origin".into(), page.origin.clone().into());
+        client_data.insert("crossOrigin".into(), false.into());
+        let mut head = Sha256::digest(page.rp_id.as_bytes()).to_vec();
+        // UP | UV | BE | BS | AT, signCount 0.
+        head.extend_from_slice(&[0x5d, 0, 0, 0, 0]);
+        Self {
+            client_data,
+            head,
+            attested_id: authenticator.credential_id.clone(),
+            named_id: None,
+            cose_key: authenticator.cose_key(),
+            extensions: None,
+            trailing: Vec::new(),
+            attestation_object: None,
+        }
+    }
+
+    pub fn authenticator_data(&self) -> Vec<u8> {
+        let mut data = self.head.clone();
+        data.extend_from_slice(&[0xaa; 16]);
+        data.extend_from_slice(&(self.attested_id.len() as u16).to_be_bytes());
+        data.extend_from_slice(&self.attested_id);
+        data.extend(encode::to_vec(&Value::Map(self.cose_key.clone())));
+        if let Some(extensions) = &self.extensions {
+            data.extend(encode::to_vec(extensions));
+        }
+        data.extend_from_slice(&self.trailing);
+        data
+    }
+
+    /// The credential object as the page PUTs it, with a `none` attestation.
+    pub fn finish(self) -> Vec<u8> {
+        let attestation_object = self.attestation_object.clone().unwrap_or_else(|| {
+            encode::to_vec(&Value::Map(vec![
+                (Value::Text("fmt".into()), Value::Text("none".into())),
+                (Value::Text("attStmt".into()), Value::Map(Vec::new())),
+                (
+                    Value::Text("authData".into()),
+                    Value::Bytes(self.authenticator_data()),
+                ),
+            ]))
+        });
+        let named = self.named_id.as_ref().unwrap_or(&self.attested_id);
+        serde_json::to_vec(&serde_json::json!({
+            "credential_id": base64url(named),
+            "client_data_json": base64url(&serde_json::to_vec(&self.client_data).unwrap()),
+            "attestation_object": base64url(&attestation_object),
+        }))
+        .unwrap()
     }
 }
 
