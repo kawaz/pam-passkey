@@ -83,15 +83,22 @@
 
 ### JWS (login keychain の passkey の項目)
 
-- 署名アルゴリズムは Ed25519 (JWS の `alg` は `Ed25519`)。署名鍵と公開鍵は `kty: OKP` / `crv: Ed25519` の JWK
-- ペイロードの中身は [DR-0011](../decisions/DR-0011-user-keychain-signed-records.md)
+- JSONL の各行は JWS の flattened JSON serialization (`protected` / `payload` / `signature`)
+- protected header は `{"alg":"Ed25519"}` だけを受け付ける。署名鍵と検証用の公開鍵は `kty: OKP` / `crv: Ed25519` の JWK
+- ペイロードのキー: `user` (OS ユーザ名) / `credential_id` / `user_id` (user handle) / `public_key` (P-256 の JWK: `kty: EC`, `crv: P-256`, `x`, `y`) / `label` / `registered` (RFC 3339 UTC) / `backup_eligible` / `backup_state`
+
+### ストアのオブジェクトのキーと `store` 設定
+
+- オブジェクトのキーは `<prefix><要求 ID>/request` / `.../assertion` / `.../result` (登録は `.../registration` / `.../credential`)。`prefix` は文字列としてそのまま前に付ける
+- `store` (System Keychain) の JSON のキー: `endpoint` / `bucket` / `region` / `prefix` / `access_key` / `secret` / `put_once`。アドレスは path-style
+- `put_once` が true のとき presigned PUT は `X-Amz-SignedHeaders` に `if-none-match` を含むので、ページは PUT に `If-None-Match: *` を付ける
 
 ### サイズ上限
 
 | オブジェクト | 上限 |
 |---|---|
 | request | 64 KiB |
-| assertion | 16 KiB |
+| assertion | 16 KiB (`authenticatorData` は 1024 バイト) |
 | credential | 16 KiB |
 
 ## 制約 / 前提
