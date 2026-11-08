@@ -1,6 +1,6 @@
 ---
 title: sudo 内 helper から PAM_USER の login keychain を読めるかの検証 (DR-0011 / DR-0012 前提)
-status: open
+status: resolved
 category: task
 created: 2026-11-02T22:18:47+09:00
 last_read: 2026-11-04T12:32:44+09:00
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T01:47:28+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["finding/2026-11-09-login-keychain-from-pam","done:GUI ログイン中は無ダイアログで読めた。ssh 経由は -25308 で remote 不可→パスワードへ。ファストユーザスイッチ中/keychain パスワード不一致/画面ロック中は未観測(実装中に拾う)"]
 blocked_by:
 origin: 自リポ TODO
 ---
