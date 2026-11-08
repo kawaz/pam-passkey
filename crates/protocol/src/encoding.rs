@@ -19,6 +19,30 @@ pub fn base64url(bytes: &[u8]) -> String {
     out
 }
 
+/// Inverse of [`base64url`]: the URL-safe alphabet without padding, and nothing else.
+/// Padding, the standard alphabet, whitespace, an impossible length (1 mod 4) and non-zero
+/// trailing bits are rejected, so each byte string has exactly one accepted spelling.
+pub fn base64url_decode(text: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() / 4 * 3 + 2);
+    for chunk in text.as_bytes().chunks(4) {
+        if chunk.len() == 1 {
+            return None;
+        }
+        let mut value = 0u32;
+        for (index, byte) in chunk.iter().enumerate() {
+            let sextet = BASE64URL.iter().position(|symbol| symbol == byte)?;
+            value |= (sextet as u32) << (18 - 6 * index);
+        }
+        let bytes = chunk.len() - 1;
+        // Bits beyond the encoded bytes must be zero (RFC 4648 §3.5, canonical encoding).
+        if value & (0x00ff_ffff >> (8 * bytes)) != 0 {
+            return None;
+        }
+        out.extend((0..bytes).map(|index| (value >> (16 - 8 * index)) as u8));
+    }
+    Some(out)
+}
+
 /// Formats Unix seconds as RFC 3339 UTC with second precision (`2026-11-03T12:00:00Z`).
 pub fn format_utc(unix_seconds: i64) -> String {
     let days = unix_seconds.div_euclid(86_400);
@@ -116,6 +140,27 @@ mod tests {
         assert_eq!(base64url(&[0xfb, 0xff]), "-_8");
         // A 16-byte request ID is 22 characters.
         assert_eq!(base64url(&[0u8; 16]).len(), 22);
+    }
+
+    // Decoding inverts encoding for every length class, and the value the page or the store sends
+    // is accepted only in the one spelling base64url() writes.
+    #[test]
+    fn base64url_decode_accepts_only_the_canonical_spelling() {
+        for length in 0..=7 {
+            let bytes: Vec<u8> = (0..length).map(|index| 0xa5 ^ index as u8).collect();
+            assert_eq!(base64url_decode(&base64url(&bytes)), Some(bytes));
+        }
+        assert_eq!(base64url_decode("-_8"), Some(vec![0xfb, 0xff]));
+        for text in [
+            "Zg==",  // padding
+            "Zm9v+", // standard alphabet
+            "Zm9v/", "Zm 9v", // whitespace
+            "Zm9vY", // 1 mod 4 symbols cannot encode whole bytes
+            "Zh",    // trailing bits set ("f" is Zg)
+            "Zm9",   // trailing bits set ("fo" is Zm8)
+        ] {
+            assert_eq!(base64url_decode(text), None, "{text}");
+        }
     }
 
     // The epoch, a leap day and a far date fix the calendar conversion against known values.

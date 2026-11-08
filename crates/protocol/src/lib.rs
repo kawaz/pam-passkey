@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod encoding;
+pub mod placement;
 
 /// Process data collected in the PAM caller before the helper is spawned.
 /// Values the caller could not obtain are `null` (docs/design/exchange-format.md, `processes`).

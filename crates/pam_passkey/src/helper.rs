@@ -1,10 +1,10 @@
 //! Starting the helper and talking helper-protocol with it (DR-0003 spawn の手順).
 
 use libc::c_int;
+use protocol::placement::secure_path;
 use protocol::{HelperCommand, HelperEvent, HelperInput};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
-use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -53,29 +53,6 @@ impl Helper {
             let _ = self.lines.send((line, Some(command)));
         }
     }
-}
-
-/// The executable and every directory up to `/` must be root-owned, not writable by group or
-/// others, and not symlinks.
-pub fn secure_path(path: &Path) -> bool {
-    if !path.is_absolute() {
-        return false;
-    }
-    let mut current = Some(path);
-    while let Some(part) = current {
-        let Ok(metadata) = part.symlink_metadata() else {
-            return false;
-        };
-        if metadata.file_type().is_symlink() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0
-        {
-            return false;
-        }
-        if part == path && !metadata.is_file() || part != path && !metadata.is_dir() {
-            return false;
-        }
-        current = part.parent();
-    }
-    true
 }
 
 /// Placement check, spawn, signature check of the spawned pid, then the input line
@@ -244,18 +221,6 @@ mod tests {
             .iter()
             .map(|report| format!("{report:?}"))
             .collect()
-    }
-
-    // A helper path is trusted only if every component, including / and the binary, is root-owned
-    // and non-writable by others; relative paths cannot be checked and are refused.
-    #[test]
-    fn rejects_relative_and_user_owned_paths() {
-        assert!(!secure_path(Path::new("target/release/pam-passkey")));
-        // The test binary lives in a user-owned build directory.
-        assert!(!secure_path(&std::env::current_exe().unwrap()));
-        assert!(secure_path(Path::new("/bin/sh")));
-        // A root-owned symlink is still refused (/tmp -> private/tmp).
-        assert!(!secure_path(Path::new("/tmp")));
     }
 
     // Each documented event becomes one report; anything else is reported as malformed, and the
