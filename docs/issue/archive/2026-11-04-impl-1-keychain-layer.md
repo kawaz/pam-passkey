@@ -1,6 +1,6 @@
 ---
 title: 実装 ① Keychain 層と login keychain の sudo 内読み出し (DR-0011 の前提検証を兼ねる)
-status: open
+status: resolved
 category: task
 created: 2026-11-04T12:26:46+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T01:48:04+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["implemented","finding/2026-11-06-keychain-acl-developer-id","finding/2026-11-09-login-keychain-from-pam","done:観測6は helper が設計上 root での読み出しを拒むため未実施、sudo_local は 1 行に復元済み"]
 blocked_by:
 origin: 自リポ TODO
 ---
