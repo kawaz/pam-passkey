@@ -179,6 +179,20 @@ impl Keychain {
             .map_err(|error| self.classify(error))
     }
 
+    /// Whether the item exists, from its attributes alone: the value is not decrypted, so
+    /// no secret is read (DR-0011: 署名鍵を読むのは add の 1 か所だけ).
+    pub fn exists_system(&self, item: SystemItem) -> Result<bool, KeychainError> {
+        let mut query = self.query(SERVICE, item.account());
+        query.load_attributes(true);
+        match query.search() {
+            Ok(results) => Ok(!results.is_empty()),
+            Err(error) => match self.classify(error) {
+                KeychainError::NotFound => Ok(false),
+                error => Err(error),
+            },
+        }
+    }
+
     pub fn read_system(&self, item: SystemItem) -> Result<String, KeychainError> {
         self.read(SERVICE, item.account())
     }

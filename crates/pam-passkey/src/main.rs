@@ -1,5 +1,12 @@
 mod auth;
 mod child;
+mod records;
+mod settings;
+mod setup;
+mod store;
+#[cfg(test)]
+mod test_support;
+mod webauthn;
 
 use child::{RunAs, current_user};
 use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
@@ -8,9 +15,14 @@ use std::ffi::{CString, c_char};
 use std::io::BufRead;
 use std::path::Path;
 
-const HELP: &str = "pam-passkey — PAM helper and Keychain layer verification
+const HELP: &str = "pam-passkey — passkey approval for PAM (sudo) from a phone or this Mac
 
-Commands (internal, started by pam_passkey.so or by the helper itself):
+Commands:
+  setup [--module <path>] [page_url] Configure the approval page, the store and send_command
+                                     (writes the System Keychain through sudo; see setup --help)
+
+Commands (internal, started by pam_passkey.so, the helper itself or setup):
+  setup --stdin                      Write the settings checked by setup (as root)
   _auth                              Serve one authentication request (helper-protocol on stdin/stdout)
   _read-user-keys <user>             Print the user's signed public-key records (exit 2: none, 3: locked)
   _open-page                         Open the URL read from stdin in the default browser
@@ -27,7 +39,8 @@ Commands (verification):
 Global options:
   --help                             Show this help
 
-Environment: ignored by Keychain item selection; spawned children inherit no environment.
+Environment: ignored by Keychain item selection; spawned children inherit none of it, except
+send_command, which gets PATH LANG LC_* TMPDIR SSH_AUTH_SOCK and its user's HOME USER LOGNAME.
 ";
 const PROBE_VALUE: &str = "pam-passkey-keychain-probe-2026";
 
@@ -193,7 +206,11 @@ fn probe_login(operation: &str) -> Result<(), Box<dyn Error>> {
 fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     match args {
         [] => print!("{HELP}"),
+        [command, ..] if command == "setup" && args.iter().any(|arg| arg == "--help") => {
+            print!("{}", setup::HELP)
+        }
         _ if args.iter().any(|arg| arg == "--help") => print!("{HELP}"),
+        [command, rest @ ..] if command == "setup" => setup::run(rest)?,
         [command] if command == "_auth" => auth::run()?,
         [command] if command == "_open-page" => browser(false)?,
         [command] if command == "_activate-browser" => browser(true)?,

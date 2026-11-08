@@ -2,16 +2,25 @@
 //! subcommand, permanently dropped to PAM_USER when it runs as root.
 
 use std::error::Error;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr, CString, OsStr};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// `send_command`'s environment allowlist (DR-0008), taken from the helper's own environment.
+/// HOME / USER / LOGNAME always come from the user database instead.
+const SHELL_ENV_ALLOWED: [&str; 4] = ["PATH", "LANG", "TMPDIR", "SSH_AUTH_SOCK"];
+/// PATH when the helper's environment has none (PAM starts the helper with an empty one):
+/// the defaults of /etc/paths.
+const DEFAULT_PATH: &str = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 /// The user a child is dropped to, resolved in the parent before fork.
 pub struct Identity {
     pub uid: libc::uid_t,
     gid: libc::gid_t,
     groups: Vec<libc::gid_t>,
+    name: String,
+    home: PathBuf,
 }
 
 /// Who the children run as: PAM_USER when the helper runs as root, otherwise the helper's
@@ -89,8 +98,17 @@ pub fn identity(user: &str) -> Result<Identity, Box<dyn Error>> {
             uid: pwd.pw_uid,
             gid: pwd.pw_gid,
             groups,
+            name: user.to_owned(),
+            home: PathBuf::from(CStr::from_ptr(pwd.pw_dir).to_str()?),
         })
     }
+}
+
+fn shell_env_allowed(key: &OsStr) -> bool {
+    let Some(key) = key.to_str() else {
+        return false;
+    };
+    SHELL_ENV_ALLOWED.contains(&key) || key.starts_with("LC_")
 }
 
 impl RunAs {
@@ -110,8 +128,34 @@ impl RunAs {
         if !executable.is_absolute() {
             return Err("helper executable must be absolute".into());
         }
-        let mut command = Command::new(executable);
-        command.arg(subcommand).env_clear().current_dir("/");
+        let mut command = self.spawnable(&executable, Path::new("/"));
+        command.arg(subcommand);
+        Ok(command)
+    }
+
+    /// `/bin/sh -c <script>` for `send_command` (DR-0008): cwd is the user's HOME and the
+    /// environment holds only the allowlist.
+    pub fn shell(&self, script: &str) -> Result<Command, Box<dyn Error>> {
+        let (name, home) = match self {
+            Self::Dropped(identity) => (identity.name.clone(), identity.home.clone()),
+            Self::Inherited => current_user()?,
+        };
+        let mut command = self.spawnable(Path::new("/bin/sh"), &home);
+        command.arg("-c").arg(script);
+        command.envs(std::env::vars_os().filter(|(key, _)| shell_env_allowed(key)));
+        if std::env::var_os("PATH").is_none() {
+            command.env("PATH", DEFAULT_PATH);
+        }
+        command
+            .env("HOME", &home)
+            .env("USER", &name)
+            .env("LOGNAME", &name);
+        Ok(command)
+    }
+
+    fn spawnable(&self, program: &Path, cwd: &Path) -> Command {
+        let mut command = Command::new(program);
+        command.env_clear().current_dir(cwd);
         // Rust opens every descriptor with CLOEXEC, so nothing beyond the configured stdio survives exec.
         // Closing descriptors here would also close the pipe Rust uses to report exec failures.
         // SAFETY: pre_exec executes only async-signal-safe libc calls after fork, before exec.
@@ -128,7 +172,7 @@ impl RunAs {
                 command.pre_exec(move || permanently_drop(uid, gid, &groups));
             }
         }
-        Ok(command)
+        command
     }
 }
 
@@ -164,6 +208,42 @@ fn permanently_drop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // send_command (DR-0008) reads the URL on stdin, runs in the user's HOME, and sees only the
+    // allowlisted environment plus the user's HOME / USER / LOGNAME (sh itself adds PWD etc.).
+    #[test]
+    fn shell_runs_in_home_with_the_allowlist() {
+        use std::io::Write;
+        use std::process::Stdio;
+        let (user, home) = current_user().unwrap();
+        let mut child = RunAs::Inherited
+            .shell("read url; echo \"url=$url\"; echo \"cwd=$(pwd -P)\"; env")
+            .unwrap()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        writeln!(child.stdin.take().unwrap(), "https://example.invalid/#x").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        assert!(text.contains("url=https://example.invalid/#x\n"), "{text}");
+        assert!(
+            text.contains(&format!("cwd={}\n", home.display())),
+            "{text}"
+        );
+        assert!(text.contains(&format!("USER={user}\n")), "{text}");
+        assert!(text.contains(&format!("LOGNAME={user}\n")), "{text}");
+        for line in text.lines().filter(|line| !line.starts_with(['u', 'c'])) {
+            let key = line.split('=').next().unwrap();
+            assert!(
+                shell_env_allowed(OsStr::new(key))
+                    || ["HOME", "USER", "LOGNAME", "PWD", "SHLVL", "_", "OLDPWD"].contains(&key),
+                "unexpected variable {key}"
+            );
+        }
+    }
 
     // Users whose ids do not fit in i32 (nobody: uid and gid -2) must still resolve to their exact
     // unsigned ids, or the drop would target the wrong identity or fail before reading anything.

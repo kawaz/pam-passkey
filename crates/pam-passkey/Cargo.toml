@@ -11,7 +11,17 @@ security-framework-sys = "2.17.0"
 core-foundation = "0.10.1"
 libc = "0.2"
 protocol = { path = "../protocol" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# S3 SigV4 presigning without an HTTP stack of its own; the requests go through ureq.
+rusty-s3 = { version = "0.11", default-features = false, features = ["rustcrypto"] }
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+url = "2"
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+sha2 = "0.11"
+md-5 = "0.11"
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std", "pkcs8"] }
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 
 [build-dependencies]
 cc = "1.2.0"
