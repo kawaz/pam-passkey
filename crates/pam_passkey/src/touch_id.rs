@@ -179,9 +179,15 @@ fn is_bidi_control(ch: char) -> bool {
     matches!(ch, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
-/// The dialog text: the caller's command line with control and bidi characters escaped,
-/// shortened in the middle so that both the command and its last arguments stay visible.
+/// The dialog text. The OS puts its own lead-in (「<プロセス名> で次の操作を実行しようとしています:」)
+/// before it, so the command follows an empty line as a paragraph of its own.
 pub fn reason(argv: &[String], fallback: &str) -> String {
+    format!("\n\n{}", command_line(argv, fallback))
+}
+
+/// The caller's command line with control and bidi characters escaped, shortened in the middle
+/// so that both the command and its last arguments stay visible.
+fn command_line(argv: &[String], fallback: &str) -> String {
     let program = argv
         .first()
         .map(|first| first.rsplit('/').next().unwrap_or(first).to_owned())
@@ -223,39 +229,54 @@ fn shorten_middle(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
-    // The prompt names the command by its basename followed by the arguments, as the user typed them.
+    // The command is its own paragraph after the OS lead-in: one empty line, then the command.
     #[test]
-    fn reason_is_the_command_line() {
+    fn reason_puts_the_command_after_an_empty_line() {
         assert_eq!(
             reason(
                 &["/usr/bin/sudo".into(), "-k".into(), "true".into()],
                 "sudo"
             ),
+            "\n\nsudo -k true"
+        );
+    }
+
+    // The command is named by its basename followed by the arguments, as the user typed them.
+    #[test]
+    fn command_line_is_basename_and_arguments() {
+        assert_eq!(
+            command_line(
+                &["/usr/bin/sudo".into(), "-k".into(), "true".into()],
+                "sudo"
+            ),
             "sudo -k true"
         );
-        assert_eq!(reason(&[], "sudo"), "sudo");
-        assert_eq!(reason(&["".into()], "login"), "login");
+        assert_eq!(command_line(&[], "sudo"), "sudo");
+        assert_eq!(command_line(&["".into()], "login"), "login");
     }
 
     // Long command lines keep their head and tail; the cut is marked so the user sees text is missing.
+    // The limit applies to the command itself, not to the separating empty line.
     #[test]
-    fn long_reason_is_shortened_in_the_middle() {
+    fn long_command_line_is_shortened_in_the_middle() {
         let argv: Vec<String> = ["sudo".to_owned(), "a".repeat(200), "--last".to_owned()].into();
-        let text = reason(&argv, "sudo");
+        let text = command_line(&argv, "sudo");
         assert_eq!(text.chars().count(), MAX_REASON_CHARS);
         assert!(text.starts_with("sudo aaa"));
         assert!(text.ends_with("aaa --last"));
         assert_eq!(text.matches('…').count(), 1);
+        assert_eq!(reason(&argv, "sudo"), format!("\n\n{text}"));
         // Multibyte characters are counted as characters and never split.
-        let wide = reason(&["sudo".into(), "あ".repeat(300)], "sudo");
+        let wide = command_line(&["sudo".into(), "あ".repeat(300)], "sudo");
         assert_eq!(wide.chars().count(), MAX_REASON_CHARS);
     }
 
-    // Control and bidi characters in argv cannot reorder or hide what the dialog shows.
+    // Control and bidi characters in argv cannot reorder or hide what the dialog shows, and a
+    // newline in an argument cannot fake the paragraph layout.
     #[test]
     fn control_and_bidi_characters_are_escaped() {
         assert_eq!(
-            reason(&["sudo".into(), "a\nb".into(), "x\u{202E}y".into()], "sudo"),
+            command_line(&["sudo".into(), "a\nb".into(), "x\u{202E}y".into()], "sudo"),
             "sudo a\\u{000A}b x\\u{202E}y"
         );
     }
