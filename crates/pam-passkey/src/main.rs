@@ -18,6 +18,8 @@ Commands (internal, started by pam_passkey.so or by the helper itself):
 
 Commands (verification):
   _probe-open <user>                 Open a dummy approval URL as <user>, then activate the browser again
+  _probe-dialog <reason>             Show the module's Touch ID dialog with <reason> verbatim (as the
+                                     current user, not root; e.g. $'line 1\\nline 2') and print the answer
   _probe-system <write|read|delete> <page_url|store|send_command|signing_key|verification_key>
                                      Inspect isolated, fixed-value System Keychain items
   _probe-login <write|read|delete>   Inspect an isolated, fixed-value login keychain item
@@ -32,6 +34,52 @@ const PROBE_VALUE: &str = "pam-passkey-keychain-probe-2026";
 unsafe extern "C" {
     fn passkey_open_url(url: *const c_char) -> i32;
     fn passkey_activate_handler(url: *const c_char) -> i32;
+    fn passkey_touch_id_create() -> *mut std::ffi::c_void;
+    fn passkey_touch_id_can_evaluate(handle: *mut std::ffi::c_void) -> std::ffi::c_long;
+    fn passkey_touch_id_begin(handle: *mut std::ffi::c_void, reason: *const c_char) -> i32;
+    fn passkey_touch_id_wait(handle: *mut std::ffi::c_void) -> std::ffi::c_long;
+    fn passkey_touch_id_release(handle: *mut std::ffi::c_void);
+}
+
+/// `_probe-dialog`: the module's dialog with an unmodified reason, to see how the dialog
+/// renders it (line breaks, length). Prints the LAError code of the answer.
+fn probe_dialog(reason: &str) -> Result<(), Box<dyn Error>> {
+    // SAFETY: geteuid has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        return Err("run as the user whose Touch ID is evaluated, without sudo".into());
+    }
+    let reason = CString::new(reason)?;
+    // SAFETY: the handle is created, used and released here; the reason outlives begin.
+    unsafe {
+        let handle = passkey_touch_id_create();
+        if handle.is_null() {
+            return Err("could not create an LAContext".into());
+        }
+        let can = passkey_touch_id_can_evaluate(handle);
+        println!("canEvaluatePolicy: {can}");
+        let answer = if can != 0 {
+            None
+        } else if passkey_touch_id_begin(handle, reason.as_ptr()) != 0 {
+            passkey_touch_id_release(handle);
+            return Err("the reason was rejected (empty or not UTF-8)".into());
+        } else {
+            Some(passkey_touch_id_wait(handle))
+        };
+        passkey_touch_id_release(handle);
+        if let Some(answer) = answer {
+            let meaning = match answer {
+                0 => "success",
+                -1 => "authentication failed",
+                -2 => "cancel",
+                -3 => "fallback (詳細を確認)",
+                -4 => "system cancel",
+                -8 => "biometry lockout",
+                _ => "other LAError",
+            };
+            println!("answer: {answer} ({meaning})");
+        }
+    }
+    Ok(())
 }
 
 /// `_read-user-keys`: runs as the user whose login keychain it reads.
@@ -150,6 +198,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         [command] if command == "_open-page" => browser(false)?,
         [command] if command == "_activate-browser" => browser(true)?,
         [command, user] if command == "_probe-open" => probe_open(user)?,
+        [command, reason] if command == "_probe-dialog" => probe_dialog(reason)?,
         [command, operation, item] if command == "_probe-system" => probe_system(operation, item)?,
         [command, operation] if command == "_probe-login" => probe_login(operation)?,
         _ => return Err("invalid arguments; run pam-passkey --help".into()),

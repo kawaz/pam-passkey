@@ -30,6 +30,8 @@ pub enum Input {
     /// The helper could not be given `open` / `reactivate`.
     OpenFailed,
     Expired,
+    /// Ctrl-C (SIGINT) while waiting.
+    Interrupted,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,9 +81,11 @@ impl Machine {
         match input {
             Input::TouchSucceeded => Action::Finish(Outcome::TouchSuccess),
             Input::RemotePassed => Action::Finish(Outcome::RemoteSuccess),
-            Input::TouchCancelled | Input::Expired | Input::EuidNotRestored | Input::OpenFailed => {
-                Action::Finish(Outcome::AuthErr)
-            }
+            Input::TouchCancelled
+            | Input::Interrupted
+            | Input::Expired
+            | Input::EuidNotRestored
+            | Input::OpenFailed => Action::Finish(Outcome::AuthErr),
             Input::TouchFallback => {
                 if self.remote == Path::Running {
                     self.touch = Path::Running;
@@ -246,6 +250,17 @@ mod tests {
         assert_eq!(run(true, true, &[Expired]), [Finish(AuthErr)]);
         assert_eq!(run(false, true, &[Expired]), [Finish(AuthErr)]);
         assert_eq!(run(true, false, &[Expired]), [Finish(AuthErr)]);
+    }
+
+    // Row: Ctrl-C — same as cancel: both stop, even with only one path running.
+    #[test]
+    fn interrupt_stops_both() {
+        assert_eq!(run(true, true, &[Interrupted]), [Finish(AuthErr)]);
+        assert_eq!(run(false, true, &[Interrupted]), [Finish(AuthErr)]);
+        assert_eq!(
+            run(true, true, &[TouchFallback, Interrupted]),
+            [Reshow, Finish(AuthErr)]
+        );
     }
 
     // Row: remote unusable (helper failed to start / unavailable) — Touch ID alone decides.

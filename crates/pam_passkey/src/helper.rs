@@ -99,10 +99,16 @@ pub fn spawn(
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     // Rust opens every descriptor with CLOEXEC, so only the configured stdio survives exec.
+    // The helper gets its own process group: Ctrl-C at the terminal goes to the caller's
+    // foreground group, and the module turns it into cancel (closing the helper's input)
+    // instead of the signal killing the helper before it can conclude the request.
     // SAFETY: the callback calls only async-signal-safe functions between fork and exec.
     unsafe {
         command.pre_exec(|| {
             libc::umask(0o077);
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }

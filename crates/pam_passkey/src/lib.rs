@@ -2,6 +2,7 @@
 //! DR-0012 state table. Remote approval itself lives in the helper (DR-0003).
 
 mod helper;
+mod interrupt;
 mod machine;
 mod process;
 mod touch_id;
@@ -77,6 +78,7 @@ struct PamConv {
 enum Event {
     Touch(TouchReport),
     Helper(helper::Report),
+    Interrupted,
 }
 
 /// Sends one `PAM_TEXT_INFO` message, split into messages of at most `PAM_MAX_MSG_SIZE` bytes.
@@ -282,6 +284,12 @@ impl Driver {
     }
 
     fn run(mut self) -> c_int {
+        let sender = self.sender.clone();
+        // Held until finish returns, so Ctrl-C also counts while the dialog is being closed.
+        // Without the watch (no pipe / sigaction failed) the wait still ends at the deadline.
+        let _interrupts = interrupt::Watch::start(move || {
+            let _ = sender.send(Event::Interrupted);
+        });
         let mut action = self.machine.initial();
         let outcome = loop {
             match action {
@@ -329,6 +337,7 @@ impl Driver {
                 None
             }
             Event::Helper(report) => helper_input(&self.id, report),
+            Event::Interrupted => Some(Input::Interrupted),
         }
     }
 

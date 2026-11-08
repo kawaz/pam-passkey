@@ -60,26 +60,31 @@ pub fn identity(user: &str) -> Result<Identity, Box<dyn Error>> {
             &mut result,
         );
         if rc != 0 || result.is_null() {
-            return Err(format!("resolve PAM_USER: {user} ({rc})").into());
+            return Err(
+                format!("user {user} is not in the user database (getpwnam_r {rc})").into(),
+            );
         }
+        // Design rationale: getgrouplist takes and returns gids as `int`, while gid_t is unsigned.
+        // Groups above i32::MAX exist (nobody / nogroup are -2 = 4294967294), so the values are
+        // reinterpreted bit for bit in both directions instead of range-checked.
         let mut groups = vec![0 as libc::c_int; 256];
-        let mut count = i32::try_from(groups.len())?;
+        let mut count: libc::c_int = 256;
         if libc::getgrouplist(
             name.as_ptr(),
-            i32::try_from(pwd.pw_gid)?,
+            pwd.pw_gid as libc::c_int,
             groups.as_mut_ptr(),
             &mut count,
         ) < 0
         {
-            return Err("target user has more than 256 supplemental groups".into());
+            return Err(format!("user {user} has more than 256 supplemental groups").into());
         }
         // setgroups rejects more than NGROUPS_MAX entries; getgrouplist may return more.
         // NGROUPS_MAX is 16 on macOS (sys/syslimits.h).
-        let count = usize::try_from(count)?.min(16);
+        let count = usize::try_from(count).unwrap_or(0).min(16);
         let groups: Vec<libc::gid_t> = groups[..count]
             .iter()
-            .map(|group| u32::try_from(*group))
-            .collect::<Result<_, _>>()?;
+            .map(|group| *group as libc::gid_t)
+            .collect();
         Ok(Identity {
             uid: pwd.pw_uid,
             gid: pwd.pw_gid,
@@ -154,4 +159,19 @@ fn permanently_drop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Users whose ids do not fit in i32 (nobody: uid and gid -2) must still resolve to their exact
+    // unsigned ids, or the drop would target the wrong identity or fail before reading anything.
+    #[test]
+    fn resolves_ids_above_i32_max() {
+        let nobody = identity("nobody").unwrap();
+        assert_eq!(nobody.uid, 4_294_967_294);
+        assert_eq!(nobody.gid, 4_294_967_294);
+        assert!(nobody.groups.contains(&4_294_967_294));
+    }
 }

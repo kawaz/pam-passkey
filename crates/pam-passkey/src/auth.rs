@@ -97,7 +97,13 @@ fn read_records(user: &str, run_as: &RunAs) -> Result<Records, Box<dyn Error>> {
         Some(0) => Ok(Records::Found(String::from_utf8(output.stdout)?)),
         Some(EXIT_NOT_FOUND) => Ok(Records::Unavailable(UnavailableReason::NoCredentials)),
         Some(EXIT_LOCKED) => Ok(Records::Unavailable(UnavailableReason::KeychainLocked)),
-        status => Err(format!("user Keychain child failed: {status:?}").into()),
+        Some(status) => Err(format!(
+            "cannot read the login keychain of user {user} (exit status {status})"
+        )
+        .into()),
+        None => {
+            Err(format!("reading the login keychain of user {user} was killed by a signal").into())
+        }
     }
 }
 
