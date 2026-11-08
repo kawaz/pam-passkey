@@ -4,8 +4,13 @@
 pam-passkey/
   README.md / README-ja.md
   LICENSE
-  justfile                  # task runner (lint / push のゲート)
+  Cargo.toml / Cargo.lock   # workspace (crates/ の 3 crate)
+  justfile                  # task runner (build = release ビルド + Developer ID 署名、install、lint、push のゲート)
   .gitignore                # target/ を除外
+  crates/
+    protocol/                 # helper-protocol / exchange-format の型 (serde)
+    pam-passkey/              # CLI と helper (Keychain 層、_auth、setup / add / list / del)
+    pam_passkey/              # PAM モジュール (cdylib。LAContext と helper の並走、DR-0012 の状態遷移)
   docs/
     DESIGN-ja.md / DESIGN.md  # 現在の設計
     STRUCTURE.md              # このファイル
@@ -19,4 +24,4 @@ pam-passkey/
     keychain/                 # System Keychain の書き込み権限と sudo 内 PAM からの読み出し (Rust + C shim、kc-poc CLI と pam_kcpoc.so)
 ```
 
-PoC はそれぞれ独立した Cargo プロジェクトで、各ディレクトリで `cargo build` する (手順は各 `README.md`)。ビルド成果物は各ディレクトリの `target/` に置かれ、追跡しない。
+本体は `just build` (release ビルドと Developer ID 署名) と `just install` (root 所有の `/usr/local/libexec/pam-passkey` と `/usr/local/lib/pam/pam_passkey.so` へ)。PoC はそれぞれ独立した Cargo プロジェクトで、各ディレクトリで `cargo build` する (手順は各 `README.md`)。ビルド成果物は `target/` に置かれ、追跡しない。
