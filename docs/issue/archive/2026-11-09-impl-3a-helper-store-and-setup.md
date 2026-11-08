@@ -1,6 +1,6 @@
 ---
 title: 実装 ③a helper のストア連携 (presign / request / assertion 検証 / result) と setup
-status: open
+status: resolved
 category: task
 created: 2026-11-09T02:43:37+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T03:22:24+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["implemented","finding/store-minio"]
 blocked_by:
 origin: 自リポ TODO
 ---
