@@ -1,7 +1,7 @@
 //! `add [label]` (DR-0011): the user's identity check, the registration through the store and
 //! the page, the credential's acceptance, and the signed record in the login keychain.
 
-use crate::child::{RunAs, current_user};
+use crate::child::{Notice, RunAs, current_user};
 use crate::language::prefers_japanese;
 use crate::passkeys::{self, own_keychain};
 use crate::records::{
@@ -16,9 +16,9 @@ use protocol::encoding::{base64url, format_utc};
 use std::error::Error;
 use std::ffi::{CString, c_char, c_long};
 use std::fmt;
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::Path;
-use std::process::{Child, Stdio};
+use std::process::Child;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How long the registration URL stays usable (DESIGN 未決事項: 要求の期限の仮の既定 90 秒).
@@ -286,25 +286,14 @@ fn load_settings(system: &Keychain, login: &Keychain) -> Result<Settings, Box<dy
 
 /// The registration URL goes to send_command or to the terminal, nowhere else (DR-0011).
 /// send_command runs alongside the wait and is stopped if it outlives it.
-fn deliver(send_command: Option<&str>, url: &str) -> Option<Child> {
+fn deliver(send_command: Option<&str>, user: &str, url: &str) -> Option<Child> {
     let Some(command) = send_command else {
         eprintln!(
             "add: open this URL in a browser that can create your passkey (valid for {LIFETIME} seconds):\n\n  {url}\n"
         );
         return None;
     };
-    let spawned = RunAs::Inherited.shell(command).and_then(|mut shell| {
-        let mut child = shell
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
-            .spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            writeln!(stdin, "{url}")?;
-        }
-        Ok(child)
-    });
-    match spawned {
+    match RunAs::Inherited.send_command(command, &Notice::register(url, user)) {
         Ok(child) => {
             eprintln!(
                 "add: sent the registration URL with send_command (valid for {LIFETIME} seconds)"
@@ -367,7 +356,7 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
     let mut frame = 0;
     let registered = enrollment.run(
         |url| {
-            sent = deliver(settings.send_command.as_deref(), url);
+            sent = deliver(settings.send_command.as_deref(), &user, url);
             if !terminal {
                 eprintln!("add: waiting for the passkey...");
             }

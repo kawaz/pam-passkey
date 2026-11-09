@@ -87,7 +87,7 @@ pam-passkey setup --edit                       # 設定を $EDITOR で開く
 |---|---|
 | page_url | 承認 / 登録ページ。既定の `https://pam-passkey.github.io/` のままでよい |
 | store | ストアの接続情報。prefix は空でよい。`secret` を `"***"` のままにすると今の secret を残す |
-| send_command | 承認 URL を標準入力で受けて届けるコマンド。空なら端末に表示 |
+| send_command | 承認 URL と登録 URL を標準入力で受けて届けるコマンド。通知に出す要約は環境変数で受ける ([通知コマンド](#通知コマンド-send_command))。空なら端末に表示 |
 | regenerate_key | 書かなければ false。true にすると署名鍵を作り直し、全ユーザの登録が無効になる (書き込む前に y/N で確認する) |
 
 エディタを使わない入口もある。
@@ -100,6 +100,53 @@ pam-passkey setup --stdin < settings.json     # 文書を渡して設定する (
 `setup` はストアへの疎通、条件付き PUT の対応、CORS と lifecycle の設定、配置先の所有権を確かめてから書き込む。
 
 以前の版の `setup` が System Keychain に書いた `page_url` / `store` / `send_command` の項目は、最初の `setup` で雛形の値に使い、その後は使わない。不要になったら `sudo security delete-generic-password -s pam-passkey -a <page_url|store|send_command> /Library/Keychains/System.keychain` で 1 つずつ消せる (署名鍵の `signing_key` / `verification_key` は消さない)。
+
+### 通知コマンド (send_command)
+
+`send_command` は承認と登録のたびに `/bin/sh -c` で起動する (そのユーザの権限、cwd はホーム)。URL は標準入力に 1 行で届き、通知の本文に使う要約は環境変数で届く。標準入力は読まなくてもよい。
+
+| 環境変数 | 中身 | 承認 | 登録 |
+|---|---|---|---|
+| `PAM_PASSKEY_URL` | 標準入力と同じ URL | ✓ | ✓ |
+| `PAM_PASSKEY_KIND` | `approve` (承認) か `register` (登録) | ✓ | ✓ |
+| `PAM_PASSKEY_USER` | 認証されるユーザ (登録では `add` を実行したユーザ) | ✓ | ✓ |
+| `PAM_PASSKEY_HOST` | Mac のホスト名 | ✓ | ✓ |
+| `PAM_PASSKEY_COMMAND` | 認証を求めたコマンド (`sudo ...`) を 1 行にしたもの。空白・引用符・制御文字を含む引数と空の引数だけを単一引用符で囲み、制御文字は `\u{000A}` の形で書く | ✓ | |
+| `PAM_PASSKEY_DETAILS` | 承認ページが表示する要求の詳細。1 行の JSON で、キーは [exchange-format](./design/exchange-format.md) の `details` | ✓ | |
+
+ほかに渡る環境変数は `PATH` `HOME` `USER` `LOGNAME` `LANG` `LC_*` `TMPDIR` `SSH_AUTH_SOCK` だけ。URL は期限付きの鍵の役をする。承認 URL を見た者は期限内に要求の詳細を読め (承認には passkey が要る)、登録 URL を見た者は自分の passkey を登録できる。届け先は自分だけが読める経路にする。
+
+Bark の例 (`~/.local/bin/pam-passkey-bark` に置いて `chmod 700`、`send_command` は `"~/.local/bin/pam-passkey-bark"`):
+
+```sh
+#!/bin/sh
+key='<Bark のデバイスキー>'
+case $PAM_PASSKEY_KIND in
+  approve) title='認証の承認'; what=$PAM_PASSKEY_COMMAND ;;
+  *) title='passkey の登録'; what='登録 URL を開いて passkey を作る' ;;
+esac
+body=$(printf '%s\n%s' "$PAM_PASSKEY_USER@$PAM_PASSKEY_HOST" "$what")
+jq -n --arg key "$key" --arg title "$title" --arg body "$body" --arg url "$PAM_PASSKEY_URL" \
+  '{device_key: $key, title: $title, body: $body, url: $url, group: "pam-passkey", level: "timeSensitive"}' |
+  curl -fsS --max-time 10 -H 'Content-Type: application/json; charset=utf-8' --data-binary @- https://api.day.app/push >/dev/null
+```
+
+ntfy の例 (置き方は Bark と同じ。公開サーバ `ntfy.sh` のトピックは名前を知る者なら誰でも購読できるので、推測されない名前にするか、アクセス制御のあるサーバを使う):
+
+```sh
+#!/bin/sh
+topic='<推測されないトピック名>'
+case $PAM_PASSKEY_KIND in
+  approve) title='認証の承認'; what=$PAM_PASSKEY_COMMAND ;;
+  *) title='passkey の登録'; what='登録 URL を開いて passkey を作る' ;;
+esac
+body=$(printf '%s\n%s' "$PAM_PASSKEY_USER@$PAM_PASSKEY_HOST" "$what")
+jq -n --arg topic "$topic" --arg title "$title" --arg body "$body" --arg url "$PAM_PASSKEY_URL" \
+  '{topic: $topic, title: $title, message: $body, click: $url, priority: 4}' |
+  curl -fsS --max-time 10 --data-binary @- https://ntfy.sh/ >/dev/null
+```
+
+承認の時の `PATH` は `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` になる (PAM は呼び出し元の環境を helper に渡さない)。例の `jq` と `curl` は `/usr/bin` にあるが、それ以外の場所 (Homebrew の `/opt/homebrew/bin` 等) のコマンドは絶対パスで書く。
 
 ## 3. passkey を登録する
 

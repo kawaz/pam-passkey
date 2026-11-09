@@ -4,7 +4,7 @@
 //! while serving PAM's commands, verify it, PUT the result, and DELETE the request and the
 //! assertion (DR-0006).
 
-use crate::child::{RunAs, current_user};
+use crate::child::{Notice, RunAs, current_user};
 use crate::log;
 use crate::records::{parse_verification_jwk, trusted_credentials};
 use crate::settings::{Config, Page, read_optional};
@@ -291,8 +291,9 @@ pub fn serve(
 /// The side effects of a request, apart from the store.
 pub trait Effects {
     fn emit(&mut self, event: &HelperEvent);
-    /// Run `send_command` with `url` on its standard input.
-    fn send(&mut self, command: &str, url: &str);
+    /// Run `send_command` with the notice's URL on its standard input and its variables in the
+    /// environment.
+    fn send(&mut self, command: &str, notice: &Notice);
     fn open(&mut self, url: &str);
     fn reactivate(&mut self, url: &str);
     fn notify_lockout(&mut self);
@@ -330,7 +331,55 @@ pub struct Remote<'a> {
     pub deadline: Instant,
 }
 
+/// What a request PUTs to the store and hands out, before anything is sent.
+struct Outgoing {
+    /// The request object: what the page fetches and what the challenge is the hash of.
+    request: Vec<u8>,
+    /// `<page_url>#<presigned GET of the request>`.
+    approval_url: String,
+    /// What send_command is told, if there is one.
+    notice: Notice,
+}
+
 impl Remote<'_> {
+    /// The request object, the approval URL and the notice for send_command. `Err` (logged)
+    /// when the request cannot be made, which the caller reports as `store-unreachable`.
+    fn outgoing(
+        &self,
+        valid_for: Duration,
+        [request_key, assertion_key, result_key]: [&str; 3],
+    ) -> Result<Outgoing, UnavailableReason> {
+        let request = ExchangeRequest::Approve {
+            details: self.input.details.clone(),
+            nonce: self.input.id.clone(),
+            expires: self.input.expires.clone(),
+            allow_credentials: self.credentials.ids(),
+            assertion_put_url: self.store.presign_put(assertion_key, valid_for).into(),
+            result_get_url: self.store.presign_get(result_key, valid_for).into(),
+        };
+        let request =
+            serde_json::to_vec(&request).map_err(|_| UnavailableReason::StoreUnreachable)?;
+        if request.len() > MAX_REQUEST {
+            warn(&format!(
+                "the request is {} bytes, over the {MAX_REQUEST}-byte limit",
+                request.len()
+            ));
+            return Err(UnavailableReason::StoreUnreachable);
+        }
+        let approval_url = format!(
+            "{}#{}",
+            self.page.url,
+            self.store.presign_get(request_key, valid_for)
+        );
+        let notice = Notice::approve(&approval_url, &self.input.details)
+            .map_err(|_| UnavailableReason::StoreUnreachable)?;
+        Ok(Outgoing {
+            request,
+            approval_url,
+            notice,
+        })
+    }
+
     /// Runs the request to its end. `Err` means the store could not take the request, which
     /// the caller reports as `unavailable store-unreachable`.
     pub fn run(
@@ -345,24 +394,11 @@ impl Remote<'_> {
         // Presigned URLs last exactly as long as the request (DR-0005).
         let valid_for =
             Duration::from_secs(u64::try_from(self.expires - unix_now()).unwrap_or(0).max(1));
-        let request = ExchangeRequest::Approve {
-            details: self.input.details.clone(),
-            nonce: id.clone(),
-            expires: self.input.expires.clone(),
-            allow_credentials: self.credentials.ids(),
-            assertion_put_url: self.store.presign_put(&assertion_key, valid_for).into(),
-            result_get_url: self.store.presign_get(&result_key, valid_for).into(),
-        };
-        // These bytes are what the page fetches and what the challenge is the hash of.
-        let request =
-            serde_json::to_vec(&request).map_err(|_| UnavailableReason::StoreUnreachable)?;
-        if request.len() > MAX_REQUEST {
-            warn(&format!(
-                "the request is {} bytes, over the {MAX_REQUEST}-byte limit",
-                request.len()
-            ));
-            return Err(UnavailableReason::StoreUnreachable);
-        }
+        let Outgoing {
+            request,
+            approval_url,
+            notice,
+        } = self.outgoing(valid_for, [&request_key, &assertion_key, &result_key])?;
         let timeout = REQUEST_TIMEOUT.min(self.deadline.saturating_duration_since(Instant::now()));
         match self.store.put(&request_key, &request, false, timeout) {
             Ok(200) => log::step(&format!(
@@ -380,16 +416,11 @@ impl Remote<'_> {
             }
         }
 
-        let approval_url = format!(
-            "{}#{}",
-            self.page.url,
-            self.store.presign_get(&request_key, valid_for)
-        );
         // The approval URL is a capability: it is delivered, never logged.
         match self.send_command {
             Some(command) => {
                 log::step(&format!("request {id}: approval URL to send_command"));
-                effects.send(command, &approval_url);
+                effects.send(command, &notice);
             }
             None => {
                 log::step(&format!("request {id}: approval URL to PAM (url event)"));
@@ -506,21 +537,8 @@ impl Effects for Helper<'_> {
 
     /// Failures are warnings only (DR-0008). The command runs alongside the wait and is
     /// stopped if it is still running when the request ends.
-    fn send(&mut self, command: &str, url: &str) {
-        let spawned = self.run_as.shell(command).and_then(|mut shell| {
-            let mut child = shell
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::inherit())
-                .spawn()?;
-            if let Some(mut stdin) = child.stdin.take()
-                && let Err(error) = writeln!(stdin, "{url}")
-            {
-                warn(&format!("writing the URL to send_command: {error}"));
-            }
-            Ok(child)
-        });
-        match spawned {
+    fn send(&mut self, command: &str, notice: &Notice) {
+        match self.run_as.send_command(command, notice) {
             Ok(child) => {
                 log::step(&format!("send_command started (pid {})", child.id()));
                 self.sent = Some(child);
@@ -876,7 +894,8 @@ mod tests {
     #[derive(Default)]
     struct Recorded {
         events: Vec<HelperEvent>,
-        sent: Vec<(String, String)>,
+        /// send_command, the URL and PAM_PASSKEY_DETAILS of each send.
+        sent: Vec<(String, String, String)>,
         opened: Vec<String>,
         notices: usize,
     }
@@ -894,11 +913,13 @@ mod tests {
             }
             self.recorded.events.push(event.clone());
         }
-        fn send(&mut self, command: &str, url: &str) {
-            let _ = self.urls.send(url.to_owned());
-            self.recorded
-                .sent
-                .push((command.to_owned(), url.to_owned()));
+        fn send(&mut self, command: &str, notice: &Notice) {
+            let _ = self.urls.send(notice.url().to_owned());
+            self.recorded.sent.push((
+                command.to_owned(),
+                notice.url().to_owned(),
+                notice.variable("PAM_PASSKEY_DETAILS").unwrap().to_owned(),
+            ));
         }
         fn open(&mut self, url: &str) {
             self.recorded.opened.push(url.to_owned());
@@ -978,6 +999,8 @@ mod tests {
         ending: Ending,
         recorded: Recorded,
         result: Option<Vec<u8>>,
+        /// The request object as the page fetched it.
+        request: Vec<u8>,
         request_left: u16,
         assertion_left: u16,
     }
@@ -1050,7 +1073,7 @@ mod tests {
                     }
                 }
             }
-            (parsed, result_get)
+            (parsed, result_get, request)
         });
         let mut recorder = Recorder {
             recorded: Recorded::default(),
@@ -1066,7 +1089,7 @@ mod tests {
             deadline: Instant::now() + Duration::from_secs(30),
         };
         let ending = remote.run(&lines, &mut recorder).unwrap();
-        let (parsed, result_get) = tester.join().unwrap();
+        let (parsed, result_get, request) = tester.join().unwrap();
         // The request carries the documented fields and the registered credential ids.
         assert_eq!(parsed["kind"], "approve");
         assert_eq!(parsed["nonce"], id);
@@ -1088,6 +1111,7 @@ mod tests {
             ending,
             recorded: recorder.recorded,
             result,
+            request,
             request_left: left("request"),
             assertion_left: left("assertion"),
         }
@@ -1325,10 +1349,11 @@ mod tests {
             "{:?}",
             finished.recorded.events
         );
-        let [(command, url)] = &finished.recorded.sent[..] else {
+        let [(command, url, details)] = &finished.recorded.sent[..] else {
             panic!("{:?}", finished.recorded.sent);
         };
         assert_eq!(command, "notify");
+        assert_details_inside(&finished.request, details);
         assert_eq!(finished.recorded.opened, std::slice::from_ref(url));
         assert_eq!((finished.request_left, finished.assertion_left), (404, 404));
 
@@ -1343,6 +1368,66 @@ mod tests {
         assert_eq!(
             (cancelled.request_left, cancelled.assertion_left),
             (404, 404)
+        );
+    }
+
+    /// `details` is, byte for byte, the `details` value inside the request object.
+    fn assert_details_inside(request: &[u8], details: &str) {
+        let prefix = format!(r#"{{"kind":"approve","details":{details},"nonce":"#);
+        assert!(
+            request.starts_with(prefix.as_bytes()),
+            "request {} does not carry details {details}",
+            String::from_utf8_lossy(request)
+        );
+    }
+
+    // DR-0008: send_command is told the request's details as the very bytes PUT to the store,
+    // with the URL it gets on its standard input, and the summary the notification shows.
+    #[test]
+    fn notice_carries_the_requests_details_as_put() {
+        let store = Store::new(&crate::test_support::unreachable_store()).unwrap();
+        let page = Page::parse("https://pam-passkey.github.io/").unwrap();
+        let mut input = input(&id(2), 30);
+        input.details.argv = vec!["sudo".into(), "echo".into(), "it's \"ü\"\n</>".into()];
+        input.details.processes = vec![protocol::ProcessDetails {
+            pid: 42,
+            uid: 501,
+            cwd: Some("/Users/kawaz/a b".into()),
+            path: None,
+            argv: Some(vec!["-zsh".into()]),
+            signing_id: None,
+            team_id: None,
+            signer: None,
+        }];
+        let remote = Remote {
+            input: &input,
+            page: &page,
+            store: &store,
+            credentials: &CredentialSet::default(),
+            send_command: Some("notify"),
+            expires: parse_utc(&input.expires).unwrap(),
+            deadline: Instant::now() + Duration::from_secs(30),
+        };
+        let keys = ["request", "assertion", "result"].map(|name| store.key(&input.id, name));
+        let outgoing = remote
+            .outgoing(Duration::from_secs(30), [&keys[0], &keys[1], &keys[2]])
+            .unwrap();
+        let notice = &outgoing.notice;
+        assert_details_inside(
+            &outgoing.request,
+            notice.variable("PAM_PASSKEY_DETAILS").unwrap(),
+        );
+        assert_eq!(notice.url(), outgoing.approval_url);
+        assert_eq!(
+            notice.variable("PAM_PASSKEY_URL"),
+            Some(outgoing.approval_url.as_str())
+        );
+        assert_eq!(notice.variable("PAM_PASSKEY_KIND"), Some("approve"));
+        assert_eq!(notice.variable("PAM_PASSKEY_USER"), Some("kawaz"));
+        assert_eq!(notice.variable("PAM_PASSKEY_HOST"), Some("mac"));
+        assert_eq!(
+            notice.variable("PAM_PASSKEY_COMMAND"),
+            Some(r#"sudo echo 'it'\''s "ü"\u{000A}</>'"#)
         );
     }
 

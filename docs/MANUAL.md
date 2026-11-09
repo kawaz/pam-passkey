@@ -87,7 +87,7 @@ Pass the location with `--module <path>` only when you put the `.so` somewhere o
 |---|---|
 | page_url | The approval / enrollment page. The default `https://pam-passkey.github.io/` can stay as is |
 | store | Connection information for the store. prefix can be empty. Leaving `secret` as `"***"` keeps the current secret |
-| send_command | A command that receives the approval URL on stdin and delivers it. If empty, it is printed to the terminal |
+| send_command | A command that receives the approval URL and the enrollment URL on stdin and delivers them. The summary for the notification comes in environment variables ([Notification command](#notification-command-send_command)). If empty, the URL is printed to the terminal |
 | regenerate_key | false if not written. Setting it to true regenerates the signing key and invalidates the enrollments of all users (asks y/N before writing) |
 
 There are also entry points that do not use an editor.
@@ -100,6 +100,53 @@ pam-passkey setup --stdin < settings.json     # pass a document to configure (on
 `setup` checks reachability of the store, support for conditional PUT, the CORS and lifecycle configuration, and the ownership of the install locations before writing.
 
 The `page_url` / `store` / `send_command` items that an earlier version of `setup` wrote to the System Keychain are used for the template values at the first `setup` and not used after that. When they are no longer needed, delete them one at a time with `sudo security delete-generic-password -s pam-passkey -a <page_url|store|send_command> /Library/Keychains/System.keychain` (do not delete the signing key's `signing_key` / `verification_key`).
+
+### Notification command (send_command)
+
+`send_command` is started with `/bin/sh -c` for every approval and enrollment (with that user's privileges, cwd at the home directory). The URL arrives on stdin as one line, and the summary to put in the notification arrives in environment variables. Reading stdin is optional.
+
+| Environment variable | Content | Approval | Enrollment |
+|---|---|---|---|
+| `PAM_PASSKEY_URL` | The same URL as on stdin | ✓ | ✓ |
+| `PAM_PASSKEY_KIND` | `approve` (approval) or `register` (enrollment) | ✓ | ✓ |
+| `PAM_PASSKEY_USER` | The user being authenticated (for enrollment, the user who ran `add`) | ✓ | ✓ |
+| `PAM_PASSKEY_HOST` | The Mac's host name | ✓ | ✓ |
+| `PAM_PASSKEY_COMMAND` | The command that asked for authentication (`sudo ...`) on one line. Only arguments that contain white space, a quote or a control character, and empty arguments, are put in single quotes; control characters are written in the form `\u{000A}` | ✓ | |
+| `PAM_PASSKEY_DETAILS` | The request details the approval page shows. One line of JSON whose keys are the `details` of [exchange-format](./design/exchange-format.md) | ✓ | |
+
+The only other environment variables passed are `PATH` `HOME` `USER` `LOGNAME` `LANG` `LC_*` `TMPDIR` `SSH_AUTH_SOCK`. A URL acts as a time-limited key: whoever sees an approval URL can read the request details until it expires (approving takes the passkey), and whoever sees an enrollment URL can register their own passkey. Deliver to a path only you can read.
+
+Bark example (put it at `~/.local/bin/pam-passkey-bark`, `chmod 700`, with `send_command` set to `"~/.local/bin/pam-passkey-bark"`):
+
+```sh
+#!/bin/sh
+key='<Bark device key>'
+case $PAM_PASSKEY_KIND in
+  approve) title='Approve authentication'; what=$PAM_PASSKEY_COMMAND ;;
+  *) title='Enroll a passkey'; what='Open the enrollment URL and create a passkey' ;;
+esac
+body=$(printf '%s\n%s' "$PAM_PASSKEY_USER@$PAM_PASSKEY_HOST" "$what")
+jq -n --arg key "$key" --arg title "$title" --arg body "$body" --arg url "$PAM_PASSKEY_URL" \
+  '{device_key: $key, title: $title, body: $body, url: $url, group: "pam-passkey", level: "timeSensitive"}' |
+  curl -fsS --max-time 10 -H 'Content-Type: application/json; charset=utf-8' --data-binary @- https://api.day.app/push >/dev/null
+```
+
+ntfy example (placed the same way as Bark; anyone who knows the name of a topic on the public `ntfy.sh` server can subscribe to it, so use a name that cannot be guessed, or a server with access control):
+
+```sh
+#!/bin/sh
+topic='<a topic name that cannot be guessed>'
+case $PAM_PASSKEY_KIND in
+  approve) title='Approve authentication'; what=$PAM_PASSKEY_COMMAND ;;
+  *) title='Enroll a passkey'; what='Open the enrollment URL and create a passkey' ;;
+esac
+body=$(printf '%s\n%s' "$PAM_PASSKEY_USER@$PAM_PASSKEY_HOST" "$what")
+jq -n --arg topic "$topic" --arg title "$title" --arg body "$body" --arg url "$PAM_PASSKEY_URL" \
+  '{topic: $topic, title: $title, message: $body, click: $url, priority: 4}' |
+  curl -fsS --max-time 10 --data-binary @- https://ntfy.sh/ >/dev/null
+```
+
+During approval `PATH` is `/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` (PAM does not pass the caller's environment to the helper). The `jq` and `curl` in the examples are in `/usr/bin`; write commands from other places (such as Homebrew's `/opt/homebrew/bin`) with absolute paths.
 
 ## 3. Enroll a passkey
 

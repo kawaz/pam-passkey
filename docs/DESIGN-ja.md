@@ -66,7 +66,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 | `pam-passkey` CLI | helper (PAM から呼ばれる内部サブコマンド) と管理機能を 1 バイナリにまとめる。承認経路のロジックはすべてこちらに置く |
 | 静的ページ | 登録ページと承認ページ。固定 HTTPS ドメイン (passkey の RP ID) に置く。既定は `https://pam-passkey.github.io/`。外部スクリプトを読まない単一ファイルにし、CSP を `<meta>` で設定する。ページは設定を持たず、必要な情報は全部 URL から受け取る |
 | S3 互換ストア | 要求、assertion、result、登録時の credential の置き場。presigned URL が期限付きの capability を兼ねる。API 互換なら差し替え可 |
-| `send_command` | 承認 URL と登録 URL を stdin で受けて届けるコマンド (Bark / ntfy / ssh 等)。未設定なら tty 表示 |
+| `send_command` | 承認 URL と登録 URL を stdin で受けて届けるコマンド (Bark / ntfy / ssh 等)。通知に出す要約 (ユーザとホスト、呼び出し元のコマンド、要求の詳細) は `PAM_PASSKEY_*` の環境変数で受ける ([DR-0008](./decisions/DR-0008-pluggable-send-command.md))。未設定なら tty 表示 |
 
 ### PAM モジュールの制約
 

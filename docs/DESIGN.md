@@ -66,7 +66,7 @@ Receiver (Mac):    "Show details" → the child of the helper, dropped to the us
 | `pam-passkey` CLI | One binary bundling the helper (an internal subcommand called from PAM) and the management functions. All approval-path logic lives here |
 | Static pages | The enrollment page and the approval page, served from a fixed HTTPS domain (the passkey RP ID). `https://pam-passkey.github.io/` by default. A single file that loads no external scripts, with CSP set via `<meta>`. The pages hold no settings; everything they need comes from the URL |
 | S3-compatible store | Holds the request, the assertion, the result and, at enrollment, the credential. Presigned URLs double as time-limited capabilities. Any API-compatible store can be swapped in |
-| `send_command` | A command that reads the approval URL and the enrollment URL from stdin and delivers them (Bark / ntfy / ssh, ...). If unset, the URL is printed to the tty |
+| `send_command` | A command that reads the approval URL and the enrollment URL from stdin and delivers them (Bark / ntfy / ssh, ...). The summary for the notification (user and host, the caller's command, the request details) comes in `PAM_PASSKEY_*` environment variables ([DR-0008](./decisions/DR-0008-pluggable-send-command.md)). If unset, the URL is printed to the tty |
 
 ### Constraints on the PAM module
 

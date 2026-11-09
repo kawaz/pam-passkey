@@ -24,7 +24,7 @@
 | `assertion_put_url` | assertion を PUT する presigned URL |
 | `result_get_url` | result を GET する presigned URL |
 
-`details`:
+`details` (helper は同じ JSON のバイト列を `send_command` の `PAM_PASSKEY_DETAILS` にも渡す。[DR-0008](../decisions/DR-0008-pluggable-send-command.md)):
 
 | キー | 中身 |
 |---|---|
@@ -110,5 +110,6 @@
 - [DESIGN-ja.md](../DESIGN-ja.md) — 親文書
 - [DR-0006](../decisions/DR-0006-approval-url-and-exchange.md) — 承認 URL と交換
 - [DR-0011](../decisions/DR-0011-user-keychain-signed-records.md) — 登録と passkey の置き場
+- [DR-0008](../decisions/DR-0008-pluggable-send-command.md) — `details` を `send_command` にも渡す
 - [helper-protocol](./helper-protocol.md) — PAM モジュールと helper の取り決め
 - [webauthn-verification](./webauthn-verification.md) — 認証と登録の受理条件

@@ -1,11 +1,13 @@
 //! Children that run as PAM_USER (DR-0003): the helper re-executes itself with an internal
 //! subcommand, permanently dropped to PAM_USER when it runs as root.
 
+use protocol::RequestDetails;
 use std::error::Error;
 use std::ffi::{CStr, CString, OsStr};
+use std::io::{ErrorKind, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
 
 /// `send_command`'s environment allowlist (DR-0008), taken from the helper's own environment.
 /// HOME / USER / LOGNAME always come from the user database instead.
@@ -138,6 +140,117 @@ fn shell_env_allowed(key: &OsStr) -> bool {
     SHELL_ENV_ALLOWED.contains(&key) || key.starts_with("LC_")
 }
 
+/// What `send_command` is told about the URL it delivers (DR-0008): the URL itself as one line
+/// on its standard input, and the `PAM_PASSKEY_*` variables the helper adds to the allowlisted
+/// environment, so that a notification can say what is asked and by whom.
+pub struct Notice {
+    url: String,
+    variables: Vec<(&'static str, String)>,
+}
+
+impl Notice {
+    /// An approval request. `PAM_PASSKEY_DETAILS` is `details` serialized exactly as inside the
+    /// request object PUT to the store (exchange-format), so the command reads the same object
+    /// the page shows, and nothing else.
+    pub fn approve(url: &str, details: &RequestDetails) -> serde_json::Result<Self> {
+        Ok(Self::new(
+            url,
+            "approve",
+            &details.user,
+            &details.host,
+            vec![
+                ("PAM_PASSKEY_COMMAND", display_command(&details.argv)),
+                ("PAM_PASSKEY_DETAILS", serde_json::to_string(details)?),
+            ],
+        ))
+    }
+
+    /// A registration by `add`: the user is the one running it, the host is this Mac.
+    pub fn register(url: &str, user: &str) -> Self {
+        Self::new(url, "register", user, &host_name(), Vec::new())
+    }
+
+    fn new(
+        url: &str,
+        kind: &str,
+        user: &str,
+        host: &str,
+        rest: Vec<(&'static str, String)>,
+    ) -> Self {
+        let mut variables = vec![
+            ("PAM_PASSKEY_URL", url.to_owned()),
+            ("PAM_PASSKEY_KIND", kind.to_owned()),
+            ("PAM_PASSKEY_USER", user.to_owned()),
+            ("PAM_PASSKEY_HOST", host.to_owned()),
+        ];
+        variables.extend(rest);
+        Self {
+            url: url.to_owned(),
+            variables,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    #[cfg(test)]
+    pub fn variable(&self, name: &str) -> Option<&str> {
+        self.variables
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+/// The Mac's host name, as the PAM module puts it in the request's `details.host`.
+/// Design rationale: the module's own `host_name` (pam_passkey/src/lib.rs) is private to that
+/// crate, so `add` repeats the same gethostname call to name the Mac the way approvals do.
+fn host_name() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: gethostname writes at most the buffer length.
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return String::new();
+    }
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
+}
+
+/// argv as one line in sh quoting, for display: an element that is empty or contains white
+/// space, a quote or a control character is put in single quotes (`'` as `'\''`), the others
+/// are left as they are. Control characters and the line and paragraph separators are written
+/// as `\u{XXXX}` inside the quotes, so that no element can break the line.
+fn display_command(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| {
+            let quoted = arg.is_empty()
+                || arg
+                    .chars()
+                    .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '\'' | '"'));
+            if !quoted {
+                return arg.clone();
+            }
+            let mut text = String::from("'");
+            for ch in arg.chars() {
+                match ch {
+                    '\'' => text.push_str("'\\''"),
+                    _ if ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}') => {
+                        text.push_str(&format!("\\u{{{:04X}}}", u32::from(ch)));
+                    }
+                    _ => text.push(ch),
+                }
+            }
+            text.push('\'');
+            text
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 impl RunAs {
     pub fn for_user(user: &str) -> Result<Self, Box<dyn Error>> {
         // SAFETY: geteuid has no preconditions.
@@ -160,9 +273,41 @@ impl RunAs {
         Ok(command)
     }
 
+    /// Starts `send_command` (DR-0008) with the notice's variables added to its environment and
+    /// the URL as one line on its standard input, then closes that input. The command runs
+    /// alongside the caller, which waits for it or stops it.
+    pub fn send_command(&self, script: &str, notice: &Notice) -> Result<Child, Box<dyn Error>> {
+        let mut command = self.shell(script)?;
+        command
+            .envs(
+                notice
+                    .variables
+                    .iter()
+                    .map(|(key, value)| (*key, value.as_str())),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+        let mut child = command.spawn()?;
+        let written = match child.stdin.take() {
+            Some(mut stdin) => writeln!(stdin, "{}", notice.url),
+            None => Ok(()),
+        };
+        match written {
+            Ok(()) => Ok(child),
+            // A command that takes the URL from PAM_PASSKEY_URL may close its input unread.
+            Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(child),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err(format!("writing the URL to send_command: {error}").into())
+            }
+        }
+    }
+
     /// `/bin/sh -c <script>` for `send_command` (DR-0008): cwd is the user's HOME and the
     /// environment holds only the allowlist.
-    pub fn shell(&self, script: &str) -> Result<Command, Box<dyn Error>> {
+    fn shell(&self, script: &str) -> Result<Command, Box<dyn Error>> {
         let (name, home) = match self {
             Self::Dropped(identity) => (identity.name.clone(), identity.home.clone()),
             Self::Inherited => current_user()?,
@@ -236,40 +381,165 @@ fn permanently_drop(
 mod tests {
     use super::*;
 
-    // send_command (DR-0008) reads the URL on stdin, runs in the user's HOME, and sees only the
-    // allowlisted environment plus the user's HOME / USER / LOGNAME (sh itself adds PWD etc.).
-    #[test]
-    fn shell_runs_in_home_with_the_allowlist() {
-        use std::io::Write;
-        use std::process::Stdio;
-        let (user, home) = current_user().unwrap();
-        let mut child = RunAs::Inherited
-            .shell("read url; echo \"url=$url\"; echo \"cwd=$(pwd -P)\"; env")
-            .unwrap()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        writeln!(child.stdin.take().unwrap(), "https://example.invalid/#x").unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(output.status.success());
-        let text = String::from_utf8(output.stdout).unwrap();
-        let home = std::fs::canonicalize(home).unwrap();
-        assert!(text.contains("url=https://example.invalid/#x\n"), "{text}");
-        assert!(
-            text.contains(&format!("cwd={}\n", home.display())),
-            "{text}"
-        );
-        assert!(text.contains(&format!("USER={user}\n")), "{text}");
-        assert!(text.contains(&format!("LOGNAME={user}\n")), "{text}");
-        for line in text.lines().filter(|line| !line.starts_with(['u', 'c'])) {
-            let key = line.split('=').next().unwrap();
-            assert!(
-                shell_env_allowed(OsStr::new(key))
-                    || ["HOME", "USER", "LOGNAME", "PWD", "SHLVL", "_", "OLDPWD"].contains(&key),
-                "unexpected variable {key}"
-            );
+    use crate::test_support::minio::temporary_directory;
+
+    fn strings(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    fn details(argv: &[&str]) -> RequestDetails {
+        RequestDetails {
+            host: "mac".into(),
+            user: "kawaz".into(),
+            caller_uid: 501,
+            tty: Some("/dev/ttys001".into()),
+            time: "2026-11-09T00:00:00Z".into(),
+            argv: strings(argv),
+            processes: Vec::new(),
         }
+    }
+
+    // send_command (DR-0008) reads the URL on stdin, runs in the user's HOME, and sees only the
+    // allowlisted environment, the user's HOME / USER / LOGNAME and the notice's PAM_PASSKEY_*
+    // variables (sh itself adds PWD etc.). A registration carries no command or details.
+    #[test]
+    fn send_command_runs_in_home_with_the_allowlist_and_the_notice() {
+        let (user, home) = current_user().unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        let url = "https://example.invalid/#x";
+        let approve = Notice::approve(url, &details(&["sudo", "echo", "a b", "é\"'"])).unwrap();
+        let register = Notice::register(url, &user);
+        for (notice, kind, notice_user) in [
+            (&approve, "approve", "kawaz"),
+            (&register, "register", user.as_str()),
+        ] {
+            let directory = temporary_directory();
+            let out = directory.join("out");
+            let script = format!(
+                "{{ read url; echo \"url=$url\"; echo \"cwd=$(pwd -P)\"; env; }} > '{}'",
+                out.display()
+            );
+            let status = RunAs::Inherited
+                .send_command(&script, notice)
+                .unwrap()
+                .wait()
+                .unwrap();
+            assert!(status.success());
+            let text = std::fs::read_to_string(&out).unwrap();
+            std::fs::remove_dir_all(&directory).unwrap();
+            assert!(text.contains(&format!("url={url}\n")), "{text}");
+            assert!(
+                text.contains(&format!("cwd={}\n", home.display())),
+                "{text}"
+            );
+            assert!(text.contains(&format!("USER={user}\n")), "{text}");
+            assert!(text.contains(&format!("LOGNAME={user}\n")), "{text}");
+            assert!(text.contains(&format!("PAM_PASSKEY_URL={url}\n")), "{text}");
+            assert!(
+                text.contains(&format!("PAM_PASSKEY_KIND={kind}\n")),
+                "{text}"
+            );
+            assert!(
+                text.contains(&format!("PAM_PASSKEY_USER={notice_user}\n")),
+                "{text}"
+            );
+            let host = notice.variable("PAM_PASSKEY_HOST").unwrap();
+            assert!(
+                text.contains(&format!("PAM_PASSKEY_HOST={host}\n")),
+                "{text}"
+            );
+            for name in ["PAM_PASSKEY_COMMAND", "PAM_PASSKEY_DETAILS"] {
+                match notice.variable(name) {
+                    Some(value) => {
+                        assert!(text.contains(&format!("{name}={value}\n")), "{text}");
+                    }
+                    None => assert!(!text.contains(name), "{text}"),
+                }
+            }
+            for line in text
+                .lines()
+                .filter(|line| !line.starts_with("url=") && !line.starts_with("cwd="))
+            {
+                let key = line.split('=').next().unwrap();
+                assert!(
+                    shell_env_allowed(OsStr::new(key))
+                        || notice.variable(key).is_some()
+                        || ["HOME", "USER", "LOGNAME", "PWD", "SHLVL", "_", "OLDPWD"]
+                            .contains(&key),
+                    "unexpected variable {key}"
+                );
+            }
+        }
+        // The approval's host and user are the request's; the registration's host is this Mac.
+        assert_eq!(approve.variable("PAM_PASSKEY_HOST"), Some("mac"));
+        assert_eq!(
+            register.variable("PAM_PASSKEY_HOST"),
+            Some(host_name().as_str())
+        );
+        assert!(!host_name().is_empty());
+    }
+
+    // A command that never reads its standard input is still a started command: it has the URL
+    // in PAM_PASSKEY_URL. The URL is longer than a pipe holds, so the write meets the closed
+    // input instead of landing in the pipe before the command closes it.
+    #[test]
+    fn send_command_may_leave_the_url_unread() {
+        let url = format!("https://example.invalid/#{}", "x".repeat(256 * 1024));
+        let directory = temporary_directory();
+        let out = directory.join("out");
+        let script = format!(
+            "exec <&-; printf '%s' \"${{#PAM_PASSKEY_URL}}\" > '{}'",
+            out.display()
+        );
+        let status = RunAs::Inherited
+            .send_command(&script, &Notice::register(&url, "kawaz"))
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(status.success());
+        let length = std::fs::read_to_string(&out).unwrap();
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(length, url.len().to_string());
+    }
+
+    // PAM_PASSKEY_COMMAND quotes only the elements that need it, and sh reads the quoted line
+    // back as the same argv; control characters become visible escapes on one line.
+    #[test]
+    fn command_is_quoted_for_display() {
+        assert_eq!(
+            display_command(&strings(&["sudo", "ls", "-la", "/tmp"])),
+            "sudo ls -la /tmp"
+        );
+        assert_eq!(
+            display_command(&strings(&["echo", "a b", ""])),
+            "echo 'a b' ''"
+        );
+        assert_eq!(
+            display_command(&strings(&["echo", "it's"])),
+            r"echo 'it'\''s'"
+        );
+        assert_eq!(
+            display_command(&strings(&["say", "\"hi\"", "全角\u{3000}空白"])),
+            "say '\"hi\"' '全角\u{3000}空白'"
+        );
+        assert_eq!(
+            display_command(&strings(&["printf", "a\nb\tc", "x\u{2028}y", "\u{1b}[2J"])),
+            r"printf 'a\u{000A}b\u{0009}c' 'x\u{2028}y' '\u{001B}[2J'"
+        );
+        assert_eq!(display_command(&[]), "");
+        let argv = strings(&["sudo", "echo", "a b", "", "it's", "\"q\"", "'"]);
+        let output = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!(
+                "set -- {}; printf '[%s]' \"$@\"",
+                display_command(&argv)
+            ))
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "[sudo][echo][a b][][it's][\"q\"][']"
+        );
     }
 
     // Users whose ids do not fit in i32 (nobody: uid and gid -2) must still resolve to their exact

@@ -54,6 +54,16 @@ helper はコマンドを起動直後から受け取り、assertion の待ちに
 
 helper から応答が無ければ、PAM は期限 (`expires`) の後に終了シグナルを送る。
 
+### `send_command` への受け渡し
+
+`send_command` が設定されていれば、helper は request を PUT した後、`PAM_USER` に降格した子で起動し ([DR-0008](../decisions/DR-0008-pluggable-send-command.md))、承認 URL を標準入力に 1 行書いて閉じる。要約は環境変数で渡し、値は起動時の入力から取る (変数の一覧は [MANUAL](../MANUAL-ja.md))。
+
+| 変数 | 起動時の入力のどこから |
+|---|---|
+| `PAM_PASSKEY_USER` / `PAM_PASSKEY_HOST` | `details.user` / `details.host` |
+| `PAM_PASSKEY_COMMAND` | `details.argv` を表示用に引用して 1 行にしたもの |
+| `PAM_PASSKEY_DETAILS` | `details`。request に入れて PUT したのと同じバイト列 |
+
 ## 制約 / 前提
 
 - 終了経路ごとに helper が PUT する result の値は [DR-0006](../decisions/DR-0006-approval-url-and-exchange.md)
@@ -63,6 +73,7 @@ helper から応答が無ければ、PAM は期限 (`expires`) の後に終了�
 - [DESIGN-ja.md](../DESIGN-ja.md) — 親文書
 - [DR-0003](../decisions/DR-0003-helper-outside-sudo.md) — helper の起動の手順と置き場
 - [DR-0006](../decisions/DR-0006-approval-url-and-exchange.md) — result の意味と値
+- [DR-0008](../decisions/DR-0008-pluggable-send-command.md) — `send_command` に渡すもの
 - [DR-0009](../decisions/DR-0009-foreground-control.md) — 前面制御
 - [DR-0012](../decisions/DR-0012-auth-state-transitions.md) — 状態遷移と helper の成功判定
 - [exchange-format](./exchange-format.md) — ストアに置く JSON の形
