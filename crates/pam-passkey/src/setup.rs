@@ -2,7 +2,7 @@
 //! then write the System Keychain items as root (`sudo <self> setup --stdin`).
 
 use crate::records::{signing_jwk, verification_jwk};
-use crate::settings::{DEFAULT_PAGE_URL, Page};
+use crate::settings::{DEFAULT_PAGE_URL, Page, read_optional};
 use crate::store::{Fetched, Store, StoreConfig, StoreError};
 use pam_passkey::keychain::{Keychain, SystemItem};
 use protocol::encoding::base64url;
@@ -24,7 +24,9 @@ Usage:
   --module <path>     Also check the placement of pam_passkey.so at <path>
 
 With a terminal on standard input, setup asks for the store (endpoint, bucket, region, prefix,
-access key, secret) and send_command. Otherwise it reads one JSON line from standard input:
+access key, secret) and send_command. When run again, the current settings are the defaults:
+Enter keeps a value, - empties the prefix or send_command, and the secret is kept without being
+shown. Otherwise it reads one JSON line from standard input:
 
   {\"page_url\": \"https://...\", \"store\": {\"endpoint\": \"https://...\", \"bucket\": \"...\",
    \"region\": \"...\", \"prefix\": \"...\", \"access_key\": \"...\", \"secret\": \"...\"},
@@ -306,18 +308,97 @@ fn prompt_secret(label: &str) -> Result<String, Box<dyn Error>> {
     Ok(secret)
 }
 
+/// The settings a previous setup wrote, offered as the prompts' defaults. An item that cannot
+/// be read gives no default.
+#[derive(Default)]
+struct Current {
+    page_url: Option<String>,
+    store: Option<StoreConfig>,
+    send_command: Option<String>,
+}
+
+fn current_settings() -> Current {
+    let Ok(keychain) = Keychain::system() else {
+        return Current::default();
+    };
+    let read = |item, name| match read_optional(&keychain, item) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("setup: could not read the current {name} ({error}); it has no default");
+            None
+        }
+    };
+    Current {
+        page_url: read(SystemItem::PageUrl, "page_url"),
+        store: read(SystemItem::Store, "store")
+            .and_then(|text| serde_json::from_str::<StoreConfig>(&text).ok()),
+        send_command: read(SystemItem::SendCommand, "send_command"),
+    }
+}
+
+/// The answer to a prompt for a value that may be empty, whose current value is `current`:
+/// Enter keeps it, `-` empties it.
+fn keep_or_clear(answer: String, current: &str) -> String {
+    match answer.as_str() {
+        "" => current.to_owned(),
+        "-" => String::new(),
+        _ => answer,
+    }
+}
+
+/// `empty` says what an empty value means.
+fn prompt_may_be_empty(label: &str, empty: &str, current: &str) -> Result<String, Box<dyn Error>> {
+    let label = if current.is_empty() {
+        format!("{label} (empty: {empty})")
+    } else {
+        format!("{label} [{current}] (-: {empty})")
+    };
+    Ok(keep_or_clear(prompt(&label, None)?, current))
+}
+
 fn interactive(page_argument: Option<&str>) -> Result<(SetupInput, String), Box<dyn Error>> {
-    let page_url = prompt("page_url", Some(page_argument.unwrap_or(DEFAULT_PAGE_URL)))?;
+    let current = current_settings();
+    let existing = current.store.as_ref();
+    let field =
+        |pick: fn(&StoreConfig) -> &str| existing.map(pick).filter(|value| !value.is_empty());
+    let page_url = prompt(
+        "page_url",
+        Some(
+            page_argument
+                .or(current.page_url.as_deref())
+                .unwrap_or(DEFAULT_PAGE_URL),
+        ),
+    )?;
+    let endpoint = prompt(
+        "store endpoint (https://...)",
+        field(|store| &store.endpoint),
+    )?;
+    let bucket = prompt("bucket", field(|store| &store.bucket))?;
+    let region = prompt("region", field(|store| &store.region))?;
+    let prefix = prompt_may_be_empty("prefix", "none", existing.map_or("", |store| &store.prefix))?;
+    let access_key = prompt("access key", field(|store| &store.access_key))?;
+    // The current secret is never shown; Enter keeps it.
+    let secret = match field(|store| &store.secret) {
+        Some(current_secret) => match prompt_secret("secret (not shown) [keep current]")? {
+            answer if answer.is_empty() => current_secret.to_owned(),
+            answer => answer,
+        },
+        None => prompt_secret("secret (not shown)")?,
+    };
     let store = StoreInput {
-        endpoint: prompt("store endpoint (https://...)", None)?,
-        bucket: prompt("bucket", None)?,
-        region: prompt("region", None)?,
-        prefix: prompt("prefix (may be empty)", Some(""))?,
-        access_key: prompt("access key", None)?,
-        secret: prompt_secret("secret (not shown)")?,
+        endpoint,
+        bucket,
+        region,
+        prefix,
+        access_key,
+        secret,
         _ignored_put_once: None,
     };
-    let send_command = prompt("send_command (empty: show URLs on the terminal)", Some(""))?;
+    let send_command = prompt_may_be_empty(
+        "send_command",
+        "show URLs on the terminal",
+        current.send_command.as_deref().unwrap_or(""),
+    )?;
     Ok((
         SetupInput {
             page_url: None,
@@ -459,6 +540,15 @@ mod tests {
             .is_err()
         );
         assert!(serde_json::from_str::<SetupInput>(r#"{"page_url":"https://x/"}"#).is_err());
+    }
+
+    // On a rerun Enter keeps the current value and `-` empties it; a new answer replaces it.
+    #[test]
+    fn rerun_answers_keep_clear_or_replace() {
+        assert_eq!(keep_or_clear(String::new(), "kawaz-mbp/"), "kawaz-mbp/");
+        assert_eq!(keep_or_clear("-".into(), "kawaz-mbp/"), "");
+        assert_eq!(keep_or_clear("other/".into(), "kawaz-mbp/"), "other/");
+        assert_eq!(keep_or_clear(String::new(), ""), "");
     }
 
     // Two different page URLs (argument and input line) are refused before the store is touched.

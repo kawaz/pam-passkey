@@ -73,6 +73,8 @@ pam-passkey setup --module /usr/local/lib/pam/pam_passkey.so
 | access key / secret | 専用ユーザのもの (画面には出ない) |
 | send_command | 承認 URL を標準入力で受けて届けるコマンド。空なら端末に表示 |
 
+設定を変えるために再実行すると、今の設定が各項目の既定値になり、Enter でそのまま残る。prefix と send_command は `-` で空にできる。secret は表示せず、Enter で今のものを残す。
+
 `setup` はストアへの疎通、条件付き PUT の対応、CORS と lifecycle の設定、配置先の所有権を確かめてから書き込む。署名鍵が既にある時は「既存の登録は全て無効になる」と出して確認する (N なら鍵を残して設定だけ更新)。
 
 ## 3. passkey を登録する
