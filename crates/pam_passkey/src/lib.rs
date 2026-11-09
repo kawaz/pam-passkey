@@ -659,6 +659,8 @@ unsafe fn authenticate(
         &input.details.processes,
         user_name,
         &service,
+        &pam_home,
+        japanese,
     ))
     .unwrap_or_else(|_| c"pam-passkey".to_owned());
     let mut driver = Driver {

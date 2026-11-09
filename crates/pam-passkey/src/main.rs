@@ -177,12 +177,19 @@ fn probe_dialog(how: DialogAs, reason: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// `--chain`: the module's dialog text for the process chain on standard input.
-fn chain_reason() -> Result<String, Box<dyn Error>> {
+/// `--chain`: the module's dialog text for the process chain on standard input, for the user
+/// whose home and language the module would use.
+fn chain_reason(home: &Path) -> Result<String, Box<dyn Error>> {
     let mut json = String::new();
     std::io::stdin().read_to_string(&mut json)?;
     let processes: Vec<protocol::ProcessDetails> = serde_json::from_str(&json)?;
-    let reason = protocol::dialog::reason(&processes, child::user_name, "sudo");
+    let reason = protocol::dialog::reason(
+        &processes,
+        child::user_name,
+        "sudo",
+        home,
+        language::prefers_japanese(home),
+    );
     println!("reason:{reason}\n");
     Ok(reason)
 }
@@ -197,7 +204,11 @@ fn probe_dialog_args(args: &[String]) -> Result<(), Box<dyn Error>> {
         _ => return Err(USAGE.into()),
     };
     let reason = if reason == "--chain" {
-        chain_reason()?
+        let home = match how {
+            Some((_, user)) => child::identity(user)?.home().to_owned(),
+            None => current_user()?.1,
+        };
+        chain_reason(&home)?
     } else {
         reason.clone()
     };
