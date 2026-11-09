@@ -4,6 +4,7 @@
 use crate::child::current_user;
 use crate::records::{PasskeyRecord, unverified_record};
 use pam_passkey::keychain::{Keychain, KeychainError};
+use protocol::untrusted::escape;
 use std::error::Error;
 use std::fmt::Write as _;
 use std::path::Path;
@@ -110,19 +111,6 @@ pub fn remove(jsonl: &str, target: &str) -> Result<(String, Vec<PasskeyRecord>),
     ))
 }
 
-/// A value from the item on one terminal line: control characters are shown escaped.
-pub fn printable(text: &str) -> String {
-    text.chars()
-        .flat_map(|symbol| {
-            if symbol.is_control() {
-                symbol.escape_unicode().collect::<Vec<_>>()
-            } else {
-                vec![symbol]
-            }
-        })
-        .collect()
-}
-
 /// `list`: one line per passkey, `<label>\t<credential id>\t<registered>`.
 pub fn list() -> Result<(), Box<dyn Error>> {
     let (user, keychain) = own_keychain()?;
@@ -131,11 +119,12 @@ pub fn list() -> Result<(), Box<dyn Error>> {
     for (number, line) in lines(&jsonl).enumerate() {
         match unverified_record(line) {
             Some(record) => {
+                // Each value stays on its terminal line and in its column.
                 println!(
                     "{}\t{}\t{}",
-                    printable(&record.label),
-                    printable(&record.credential_id),
-                    printable(&record.registered)
+                    escape(&record.label),
+                    escape(&record.credential_id),
+                    escape(&record.registered)
                 );
                 shown += 1;
             }
@@ -161,8 +150,8 @@ pub fn del(target: &str) -> Result<(), Box<dyn Error>> {
     for record in removed {
         println!(
             "deleted {}\t{}",
-            printable(&record.label),
-            printable(&record.credential_id)
+            escape(&record.label),
+            escape(&record.credential_id)
         );
     }
     Ok(())
@@ -242,9 +231,10 @@ mod tests {
         assert!(append(&jsonl, &record(1, "dup"), &id(1)).is_err());
     }
 
+    // A label printed by list / del cannot break its line or color the terminal; CJK is kept.
     #[test]
-    fn printable_escapes_control_characters() {
-        assert_eq!(printable("a\tb\u{1b}[31m"), "a\\u{9}b\\u{1b}[31m");
-        assert_eq!(printable("ラベル"), "ラベル");
+    fn labels_escape_control_characters() {
+        assert_eq!(escape("a\tb\u{1b}[31m"), r"a\u{0009}b\u{001B}[31m");
+        assert_eq!(escape("ラベル"), "ラベル");
     }
 }

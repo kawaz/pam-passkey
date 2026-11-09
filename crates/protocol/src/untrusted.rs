@@ -1,5 +1,6 @@
-//! Showing strings that come from the caller's process chain (argv, paths, user names), which
-//! are untrusted: in the Touch ID dialog and in what `send_command` is told.
+//! Showing untrusted strings: the caller's process chain (argv, paths, user names) in the Touch
+//! ID dialog and in what `send_command` is told, and the passkey records' values that `add` /
+//! `list` / `del` print on the terminal.
 
 /// Control characters, the line and paragraph separators and format characters as `\u{XXXX}`,
 /// so that the string stays on its line and cannot reorder or hide what is shown around it.

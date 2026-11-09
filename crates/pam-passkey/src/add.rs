@@ -409,7 +409,7 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
     login.write_user(&user, &jsonl)?;
     println!(
         "added {}\t{}",
-        passkeys::printable(&record.label),
+        protocol::untrusted::escape(&record.label),
         record.credential_id
     );
     Ok(())
