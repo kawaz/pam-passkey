@@ -1,7 +1,7 @@
 ---
 title: 要求詳細を要求ごとの鍵で AEAD 暗号化し、鍵を承認 URL の fragment で運ぶ
-status: idea
-category: idea
+status: open
+category: task
 created: 2026-11-09T11:27:03+09:00
 last_read:
 open_entered:
@@ -34,7 +34,7 @@ argv に紛れる秘密 (`--token=…` 等) や、将来 env の許可リスト�
 
 ## 条件
 
-一周 (B の置き場変更 + 通知) が安定してから。DR-0006 の「暗号化しない」を置き換える新 DR を起こし、DESIGN / exchange-format / webauthn-verification / DR-0010 を更新。env を載せる判断をする時は許可リスト (提言 2) を併せて。
+採用は決定済み (kawaz 2026-11-09)。着手は一周 (B の置き場変更 + 通知) が安定してから。DR-0006 の「暗号化しない」を置き換える新 DR を起こし、DESIGN / exchange-format / webauthn-verification / DR-0010 を更新。env を載せる判断をする時は許可リスト (提言 2) を併せて。
 
 ## 未決
 
