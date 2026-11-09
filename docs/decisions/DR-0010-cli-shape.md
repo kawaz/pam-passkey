@@ -10,16 +10,19 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
 ## Decision
 
 - helper と管理機能を `pam-passkey` の 1 バイナリにまとめる
-- サブコマンドは `setup [--module <path>] [page_url]` / `add [label]` / `list` / `del <label|id>` と、PAM から呼ばれる内部用サブコマンド
-- 内部用のフラグ `setup --stdin`: sudo で再実行された `setup` が、標準入力の JSON 1 行だけを設定として受けて書き込む
+- サブコマンドは `setup [--edit|--stdin|--dump] [--module <path>] [page_url]` / `add [label]` / `list` / `del <label|id>` と、PAM から呼ばれる内部用サブコマンド
+- 内部用サブコマンド `_setup-write`: sudo で再実行され、`setup` が検証した設定 (標準入力の JSON 1 行) だけを受けて書き込む
 - passkey の操作は `ssh-add` / `useradd` の感触で動詞だけにする (操作対象はツール名から自明)
-- `setup`:
-  - root でなく実行されたら、ユーザ権限で入力 (対話 / 非対話) を集めて検証し、書き込みの瞬間だけ自分の実行ファイルの絶対パスで `sudo <self> setup --stdin` を再実行し、集めた設定を JSON 1 行で stdin に渡す。root で直接実行された場合はそのまま書く。引数が無い時は、標準入力が tty なら対話で入力を受け、tty でなく標準入力も空ならヘルプを出す
-  - `page_url` を省略すると既定の `https://pam-passkey.github.io/` を使う
-  - `store` と `send_command` は対話で入力する (秘密の値は画面に出さない)。標準入力が tty でなければ、標準入力から JSON 1 行で受ける。キーは `page_url`、`store` (オブジェクト)、`send_command`、`regenerate_key` (bool。既定は false で、署名鍵があれば維持する)
-  - 署名鍵が既にあれば、作り直すと既存の登録が全て無効になる旨を 1 行出して y/N で確認する。N なら署名鍵は維持し、設定 (`page_url` / `store` / `send_command`) だけを更新する
+- `setup` は設定を 1 つの JSON 文書として扱う。キーは `page_url`、`store` (オブジェクト: `endpoint` / `bucket` / `region` / `prefix` / `access_key` / `secret`)、`send_command`、`regenerate_key` (bool。既定は false で、署名鍵があれば維持する)
+  - `--dump`: 今の設定を整形 JSON で標準出力に出す。`secret` は `"***"` に置き換え、`put_once` と `regenerate_key` は出さない。設定が無ければ page_url だけ既定値を入れた雛形を出す
+  - `--stdin`: 標準入力の JSON (1 行でも整形でも) を設定として受ける。`secret` が `"***"` なら今の secret を維持する
+  - `--edit`: `--dump` の内容を利用者だけが読める一時ファイルに書いて `$EDITOR` (未設定なら vi) で開き、エディタが正常終了して内容が変わっていれば `--stdin` と同じ処理をする。変わっていなければ何もしない。一時ファイルは終了時に消す
+  - 引数が無い時は、標準入力が tty なら `--edit`、tty でなければヘルプを出す
+  - `page_url` 引数を省略すると文書の `page_url`、それも無ければ既定の `https://pam-passkey.github.io/` を使う。引数と文書の両方にあって食い違えばエラー
+  - 受けた設定は、ユーザ権限で検証し (ストアへの到達、CORS と lifecycle、置き場の検査)、書き込みの瞬間だけ自分の実行ファイルの絶対パスで `sudo <self> _setup-write` を再実行して、検証済みの設定を JSON 1 行で stdin に渡す。root で直接実行された場合はそのまま書く
+  - `regenerate_key` が true で署名鍵が既にあれば、作り直すと既存の登録が全て無効になる。`--edit` (端末あり) では y/N で確認し、`--stdin` では文書の値を決定として扱い、その旨を 1 行出す
   - ストアへの到達を確かめ、バケットの CORS と lifecycle ルール ([DR-0006](./DR-0006-approval-url-and-exchange.md)) を設定する。CORS の `AllowedHeaders` には `If-None-Match` を含める。権限が無ければエラーで止まり、必要な設定を表示する
-  - 疎通確認で、`If-None-Match: *` を付けた同じキーへの 2 回目の PUT が 412 になるかを試し、結果を `store` 設定の `put_once` (true / false) に持つ ([DR-0005](./DR-0005-s3-compatible-store.md))。`put_once` は `setup` が判定する値で、非対話の JSON では渡せない (渡されても無視する)
+  - 疎通確認で、`If-None-Match: *` を付けた同じキーへの 2 回目の PUT が 412 になるかを試し、結果を `store` 設定の `put_once` (true / false) に持つ ([DR-0005](./DR-0005-s3-compatible-store.md))。`put_once` は `setup` が判定する値で、文書では渡せない (渡されても無視する)
   - 自分の実行ファイルの置き場を [DR-0003](./DR-0003-helper-outside-sudo.md) の基準で検査する。`.so` の置き場は `--module <path>` が与えられた時だけ検査する
 - `add` の label の既定値は登録日時 (`YYYY-MM-DD HH:MM`)。label は一意でなくてよい
 - `del` は引数が credential id に一致すればそれを優先する。label が複数の passkey に一致したらエラーで止まり、候補を出す
@@ -31,6 +34,7 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
 |---|---|
 | 登録の動詞を `enroll` にする | WebAuthn の語彙で、利用者にとって重い |
 | `passkey add` のように対象名詞を挟む | 対象は名前から自明で、名詞を挟む必要が無い |
+| `setup` が対話で項目を 1 つずつ聞く | 再実行で今の値を残す・空にする・secret を出さずに残す、の取り決めが項目ごとに要り、非対話の入口とも別の経路になる。JSON 文書 1 つなら `--dump` / 編集 / `--stdin` が同じ形で往復する |
 
 ## Consequences
 

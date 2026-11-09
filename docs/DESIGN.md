@@ -132,7 +132,7 @@ No files for settings or state are kept. Settings and the signing key live in ge
 
 - Reads and writes of Keychain items are limited to the `pam-passkey` binary (Developer ID signed), and the ACL of every item is narrowed to this binary. The PAM module does not read the Keychain. An ad-hoc signature changes on every build and drops off the ACL, so Developer ID signing is a prerequisite
 - Root is needed only for the writes of `setup` to the System Keychain (`setup` re-runs itself with sudo only at the moment of writing). `add` / `del` / `list` run with user privileges
-- `setup` generates the signing key (a JWK private key), and puts the signing key and the public key for verification in the System Keychain. Regenerating the signing key by re-running invalidates all existing enrollments (run `add` again). If a signing key already exists it asks y/N, and on N it keeps the signing key and updates only the settings ([DR-0010](./decisions/DR-0010-cli-shape.md))
+- `setup` generates the signing key (a JWK private key), and puts the signing key and the public key for verification in the System Keychain. Regenerating the signing key by re-running invalidates all existing enrollments (run `add` again). The signing key is regenerated only when `regenerate_key` in the settings JSON is true (by default the existing key is kept and only the settings are updated), and `--edit` asks y/N before regenerating ([DR-0010](./decisions/DR-0010-cli-shape.md))
 - At authentication time the login keychain is read by a child that the helper dropped to `PAM_USER`, and the item `users/<PAM_USER>` is read (reading the unlocked login keychain as the user). Each JWS is verified with the public key, and entries that fail verification, or whose payload OS user name does not match the user being authenticated, are ignored as invalid
 - How the path is closed where a user-privileged process enrolls a key on its own and approves its own authentication is in [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
 - There is one `store` and one `send_command` for the system, so the URLs for another user's authentication on the same Mac go to the same `send_command`
@@ -152,7 +152,7 @@ Everything else (polling interval, button labels) is a code default.
 
 | Subcommand | Purpose |
 |---|---|
-| `setup [--module <path>] [page_url]` | Initial setup (sudo at write time). If `page_url` is omitted, the default `https://pam-passkey.github.io/` is used. Takes `store` and `send_command`, checks that the store is reachable, sets the CORS and lifecycle of the bucket, and checks the ownership of the install locations |
+| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | Initial setup and changes (sudo at write time). The settings are one JSON document: `--dump` prints the current one (the secret as `***`), `--stdin` takes one, and `--edit` (the default) edits it in `$EDITOR`. If `page_url` is omitted, the default `https://pam-passkey.github.io/` is used. Takes `store` and `send_command`, checks that the store is reachable, sets the CORS and lifecycle of the bucket, and checks the ownership of the install locations |
 | `add [label]` | Enroll a passkey (asks for identity verification). The default label is the enrollment date and time |
 | `list` | List your own passkeys (label, credential id, enrollment date) |
 | `del <label\|id>` | Delete a passkey |

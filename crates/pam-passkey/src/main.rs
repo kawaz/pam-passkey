@@ -22,8 +22,10 @@ use std::path::Path;
 const HELP: &str = "pam-passkey — passkey approval for PAM (sudo) from a phone or this Mac
 
 Commands:
-  setup [--module <path>] [page_url] Configure the approval page, the store and send_command
-                                     (writes the System Keychain through sudo; see setup --help)
+  setup [--edit|--stdin|--dump] [--module <path>] [page_url]
+                                     Configure the approval page, the store and send_command as a
+                                     JSON document (writes the System Keychain through sudo; see
+                                     setup --help)
   add [label]                        Register a passkey for yourself (asks for Touch ID or your
                                      password, then shows or sends a registration URL; the label
                                      defaults to the registration time)
@@ -31,7 +33,7 @@ Commands:
   del <label|id>                     Delete one of your passkeys by credential id or by label
 
 Commands (internal, started by pam_passkey.so, the helper itself or setup):
-  setup --stdin                      Write the settings checked by setup (as root)
+  _setup-write                       Write the settings checked by setup (as root)
   _auth                              Serve one authentication request (helper-protocol on stdin/stdout)
   _read-user-keys <user>             Print the user's signed public-key records (exit 2: none, 3: locked)
   _open-page                         Open the URL read from stdin in the default browser
@@ -226,6 +228,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         [command] if command == "list" => passkeys::list()?,
         [command, target] if command == "del" => passkeys::del(target)?,
         [command] if command == "_auth" => auth::run()?,
+        [command] if command == "_setup-write" => setup::write_from_stdin()?,
         [command] if command == "_open-page" => browser(false)?,
         [command] if command == "_activate-browser" => browser(true)?,
         [command, user] if command == "_probe-open" => probe_open(user)?,

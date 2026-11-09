@@ -61,21 +61,41 @@ R2 で CORS の設定が API から通らない場合は、`setup` が表示す�
 
 ```sh
 just install                                   # ビルドと Developer ID 署名、root 所有の場所へ配置
-pam-passkey setup --module /usr/local/lib/pam/pam_passkey.so
+pam-passkey setup --module /usr/local/lib/pam/pam_passkey.so   # 設定を $EDITOR で開く
 ```
 
-`setup` は対話で次を聞く。書き込みの瞬間だけ `sudo` で自分を再実行する。
+`setup` は設定を 1 つの JSON 文書として扱う。引数なしで実行すると今の設定 (初回は雛形) が `$EDITOR` (未設定なら vi) で開くので、書き換えて保存して閉じる。内容が変わっていれば検証して書き込み、変わっていなければ何もしない。書き込みの瞬間だけ `sudo` で自分を再実行する。
 
-| 項目 | 入力 |
+```json
+{
+  "page_url": "https://pam-passkey.github.io/",
+  "store": {
+    "endpoint": "https://s3.ap-northeast-1.amazonaws.com",
+    "bucket": "pam-passkey-<自分の名前>",
+    "region": "ap-northeast-1",
+    "prefix": "",
+    "access_key": "AKIA...",
+    "secret": "***"
+  },
+  "send_command": ""
+}
+```
+
+| キー | 中身 |
 |---|---|
-| page_url | Enter で既定の `https://pam-passkey.github.io/` |
-| endpoint / bucket / region / prefix | ストアの接続情報。prefix は省略可 |
-| access key / secret | 専用ユーザのもの (画面には出ない) |
+| page_url | 承認 / 登録ページ。既定の `https://pam-passkey.github.io/` のままでよい |
+| store | ストアの接続情報。prefix は空でよい。`secret` を `"***"` のままにすると今の secret を残す |
 | send_command | 承認 URL を標準入力で受けて届けるコマンド。空なら端末に表示 |
+| regenerate_key | 書かなければ false。true にすると署名鍵を作り直し、全ユーザの登録が無効になる (書き込む前に y/N で確認する) |
 
-設定を変えるために再実行すると、今の設定が各項目の既定値になり、Enter でそのまま残る。prefix と send_command は `-` で空にできる。secret は表示せず、Enter で今のものを残す。
+エディタを使わない入口もある。
 
-`setup` はストアへの疎通、条件付き PUT の対応、CORS と lifecycle の設定、配置先の所有権を確かめてから書き込む。署名鍵が既にある時は「既存の登録は全て無効になる」と出して確認する (N なら鍵を残して設定だけ更新)。
+```sh
+pam-passkey setup --dump > settings.json      # 今の設定 (secret は "***")
+pam-passkey setup --stdin < settings.json     # 文書を渡して設定する (1 行でも整形でもよい)
+```
+
+`setup` はストアへの疎通、条件付き PUT の対応、CORS と lifecycle の設定、配置先の所有権を確かめてから書き込む。
 
 ## 3. passkey を登録する
 
@@ -110,4 +130,4 @@ auth       sufficient     /usr/local/lib/pam/pam_passkey.so
 
 - ダイアログが出ない / すぐパスワードになる: `/usr/local/libexec/pam-passkey` と `.so` が root 所有で Developer ID 署名か、`setup` を済ませているかを確認する
 - ssh 経由の sudo では Touch ID もリモート承認も使えない (login keychain が unlock されていないため)。パスワードになる
-- 登録を全部やり直したい: `pam-passkey setup` で署名鍵を作り直す (全ユーザの登録が無効になる)
+- 登録を全部やり直したい: `pam-passkey setup` で `"regenerate_key": true` を足して署名鍵を作り直す (全ユーザの登録が無効になる)
