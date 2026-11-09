@@ -20,7 +20,7 @@ use std::ffi::{CString, c_char};
 use std::io::BufRead;
 use std::path::Path;
 
-const HELP: &str = "pam-passkey — passkey approval for PAM (sudo) from a phone or this Mac
+const HELP: &str = "pam-passkey — passkey approval for PAM authentication (e.g. sudo) from a phone or this Mac
 
 Commands:
   setup [--edit|--stdin|--dump] [--module <path>] [page_url]

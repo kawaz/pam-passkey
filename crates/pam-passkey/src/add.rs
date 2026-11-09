@@ -236,9 +236,9 @@ fn local_label(unix_seconds: i64) -> String {
 /// The identity check's text, after the OS lead-in ("<app> is trying to ...").
 fn owner_reason(user: &str, japanese: bool) -> String {
     if japanese {
-        format!("{user} の passkey を登録します (スマホやこの Mac からの sudo の承認用)")
+        format!("{user} の passkey を登録します (スマホやこの Mac からの認証の承認用)")
     } else {
-        format!("register a passkey for {user} (sudo approvals from a phone or this Mac)")
+        format!("register a passkey for {user} (approving authentication from a phone or this Mac)")
     }
 }
 
