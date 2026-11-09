@@ -220,19 +220,6 @@ fn user_name(uid: uid_t) -> Option<String> {
     }
 }
 
-fn host_name() -> String {
-    let mut buffer = [0u8; 256];
-    // SAFETY: gethostname writes at most the buffer length.
-    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
-        return String::new();
-    }
-    let end = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..end]).into_owned()
-}
-
 fn request_id() -> String {
     let mut bytes = [0u8; 16];
     // SAFETY: arc4random_buf fills exactly the given length.
@@ -599,7 +586,7 @@ unsafe fn authenticate(
         expires: format_utc(now + REQUEST_LIFETIME.as_secs() as i64),
         tty: tty.clone(),
         details: RequestDetails {
-            host: host_name(),
+            host: protocol::host_name(),
             user,
             caller_uid,
             tty,

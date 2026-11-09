@@ -111,7 +111,7 @@ pam-passkey setup --stdin < settings.json     # 文書を渡して設定する (
 | `PAM_PASSKEY_KIND` | `approve` (承認) か `register` (登録) | ✓ | ✓ |
 | `PAM_PASSKEY_USER` | 認証されるユーザ (登録では `add` を実行したユーザ) | ✓ | ✓ |
 | `PAM_PASSKEY_HOST` | Mac のホスト名 | ✓ | ✓ |
-| `PAM_PASSKEY_COMMAND` | 認証を求めたコマンド (`sudo ...`) を 1 行にしたもの。空白・引用符・制御文字を含む引数と空の引数だけを単一引用符で囲み、制御文字は `\u{000A}` の形で書く | ✓ | |
+| `PAM_PASSKEY_COMMAND` | 認証を求めたコマンド (`sudo ...`) を 1 行にしたもの。空白・引用符・制御文字・書式文字 (bidi 制御、ゼロ幅文字など) を含む引数と空の引数だけを単一引用符で囲み、制御文字・行と段落の区切り文字 (U+2028 / U+2029)・書式文字は Touch ID ダイアログと同じく `\u{000A}` の形で書く | ✓ | |
 | `PAM_PASSKEY_DETAILS` | 承認ページが表示する要求の詳細。1 行の JSON で、キーは [exchange-format](./design/exchange-format.md) の `details` | ✓ | |
 
 ほかに渡る環境変数は `PATH` `HOME` `USER` `LOGNAME` `LANG` `LC_*` `TMPDIR` `SSH_AUTH_SOCK` だけ。URL は期限付きの鍵の役をする。承認 URL を見た者は期限内に要求の詳細を読め (承認には passkey が要る)、登録 URL を見た者は自分の passkey を登録できる。届け先は自分だけが読める経路にする。

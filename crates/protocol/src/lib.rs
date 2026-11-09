@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 pub mod dialog;
 pub mod encoding;
 pub mod placement;
+pub mod untrusted;
 
 /// Process data collected in the PAM caller before the helper is spawned.
 /// Values the caller could not obtain are `null` (docs/design/exchange-format.md, `processes`).
@@ -29,6 +30,21 @@ pub struct RequestDetails {
     pub time: String,
     pub argv: Vec<String>,
     pub processes: Vec<ProcessDetails>,
+}
+
+/// The Mac's host name as `details.host` names it (gethostname); empty when it cannot be read.
+/// `add` names the Mac with it too, so approvals and registrations name it alike.
+pub fn host_name() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: gethostname writes at most the buffer length.
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
+        return String::new();
+    }
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    String::from_utf8_lossy(&buffer[..end]).into_owned()
 }
 
 /// The first line the PAM module writes to the helper's standard input.

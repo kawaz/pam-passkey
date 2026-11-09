@@ -1,7 +1,8 @@
 //! Children that run as PAM_USER (DR-0003): the helper re-executes itself with an internal
 //! subcommand, permanently dropped to PAM_USER when it runs as root.
 
-use protocol::RequestDetails;
+use protocol::untrusted::escape;
+use protocol::{RequestDetails, host_name};
 use std::error::Error;
 use std::ffi::{CStr, CString, OsStr};
 use std::io::{ErrorKind, Write};
@@ -204,48 +205,25 @@ impl Notice {
     }
 }
 
-/// The Mac's host name, as the PAM module puts it in the request's `details.host`.
-/// Design rationale: the module's own `host_name` (pam_passkey/src/lib.rs) is private to that
-/// crate, so `add` repeats the same gethostname call to name the Mac the way approvals do.
-fn host_name() -> String {
-    let mut buffer = [0u8; 256];
-    // SAFETY: gethostname writes at most the buffer length.
-    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
-        return String::new();
-    }
-    let end = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
-    String::from_utf8_lossy(&buffer[..end]).into_owned()
-}
-
 /// argv as one line in sh quoting, for display: an element that is empty or contains white
-/// space, a quote or a control character is put in single quotes (`'` as `'\''`), the others
-/// are left as they are. Control characters and the line and paragraph separators are written
-/// as `\u{XXXX}` inside the quotes, so that no element can break the line.
+/// space, a quote or a character the untrusted-string escape rewrites (control, line and
+/// paragraph separators, format characters such as bidi controls) is put in single quotes
+/// (`'` as `'\''`), the others are left as they are. Inside the quotes those characters are
+/// `\u{XXXX}`, as in the Touch ID dialog, so that no element can break the line or reorder it.
 fn display_command(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| {
+            let escaped = escape(arg);
             let quoted = arg.is_empty()
+                || escaped != *arg
                 || arg
                     .chars()
-                    .any(|ch| ch.is_whitespace() || ch.is_control() || matches!(ch, '\'' | '"'));
-            if !quoted {
-                return arg.clone();
+                    .any(|ch| ch.is_whitespace() || matches!(ch, '\'' | '"'));
+            if quoted {
+                format!("'{}'", escaped.replace('\'', "'\\''"))
+            } else {
+                escaped
             }
-            let mut text = String::from("'");
-            for ch in arg.chars() {
-                match ch {
-                    '\'' => text.push_str("'\\''"),
-                    _ if ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}') => {
-                        text.push_str(&format!("\\u{{{:04X}}}", u32::from(ch)));
-                    }
-                    _ => text.push(ch),
-                }
-            }
-            text.push('\'');
-            text
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -525,6 +503,16 @@ mod tests {
         assert_eq!(
             display_command(&strings(&["printf", "a\nb\tc", "x\u{2028}y", "\u{1b}[2J"])),
             r"printf 'a\u{000A}b\u{0009}c' 'x\u{2028}y' '\u{001B}[2J'"
+        );
+        // Format characters (a bidi override, a zero-width space) cannot reorder or hide parts.
+        assert_eq!(
+            display_command(&strings(&[
+                "rm",
+                "exe.\u{202E}txt",
+                "a\u{200B}b",
+                "it's\u{2066}"
+            ])),
+            r"rm 'exe.\u{202E}txt' 'a\u{200B}b' 'it'\''s\u{2066}'"
         );
         assert_eq!(display_command(&[]), "");
         let argv = strings(&["sudo", "echo", "a b", "", "it's", "\"q\"", "'"]);

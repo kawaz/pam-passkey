@@ -61,7 +61,9 @@ Global options:
   --help                             Show this help
 
 Environment: ignored by Keychain item selection; spawned children inherit none of it, except
-send_command, which gets PATH LANG LC_* TMPDIR SSH_AUTH_SOCK and its user's HOME USER LOGNAME.
+send_command, which gets PATH LANG LC_* TMPDIR SSH_AUTH_SOCK and its user's HOME USER LOGNAME,
+and is told about the request in PAM_PASSKEY_URL PAM_PASSKEY_KIND PAM_PASSKEY_USER
+PAM_PASSKEY_HOST (approvals also PAM_PASSKEY_COMMAND PAM_PASSKEY_DETAILS); see docs/MANUAL.md.
 ";
 const PROBE_VALUE: &str = "pam-passkey-keychain-probe-2026";
 

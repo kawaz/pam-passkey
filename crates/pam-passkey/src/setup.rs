@@ -46,8 +46,9 @@ The settings document (JSON, one line or formatted):
 
   secret \"***\"       keeps the current secret
   prefix             may be empty or omitted
-  send_command       receives each approval / registration URL on standard input; empty shows
-                     the URLs on the terminal
+  send_command       receives each approval / registration URL on standard input, and a summary
+                     of the request in PAM_PASSKEY_* environment variables (docs/MANUAL.md);
+                     empty shows the URLs on the terminal
   regenerate_key     true replaces the signing key, which invalidates every registered passkey
                      (default false: an existing key is kept)
 

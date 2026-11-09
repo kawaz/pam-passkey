@@ -111,7 +111,7 @@ The `page_url` / `store` / `send_command` items that an earlier version of `setu
 | `PAM_PASSKEY_KIND` | `approve` (approval) or `register` (enrollment) | ✓ | ✓ |
 | `PAM_PASSKEY_USER` | The user being authenticated (for enrollment, the user who ran `add`) | ✓ | ✓ |
 | `PAM_PASSKEY_HOST` | The Mac's host name | ✓ | ✓ |
-| `PAM_PASSKEY_COMMAND` | The command that asked for authentication (`sudo ...`) on one line. Only arguments that contain white space, a quote or a control character, and empty arguments, are put in single quotes; control characters are written in the form `\u{000A}` | ✓ | |
+| `PAM_PASSKEY_COMMAND` | The command that asked for authentication (`sudo ...`) on one line. Only arguments that contain white space, a quote, a control character or a format character (bidi controls, zero-width characters, ...), and empty arguments, are put in single quotes; control characters, the line and paragraph separators (U+2028 / U+2029) and format characters are written in the form `\u{000A}`, as in the Touch ID dialog | ✓ | |
 | `PAM_PASSKEY_DETAILS` | The request details the approval page shows. One line of JSON whose keys are the `details` of [exchange-format](./design/exchange-format.md) | ✓ | |
 
 The only other environment variables passed are `PATH` `HOME` `USER` `LOGNAME` `LANG` `LC_*` `TMPDIR` `SSH_AUTH_SOCK`. A URL acts as a time-limited key: whoever sees an approval URL can read the request details until it expires (approving takes the passkey), and whoever sees an enrollment URL can register their own passkey. Deliver to a path only you can read.
