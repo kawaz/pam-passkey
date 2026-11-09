@@ -11,6 +11,7 @@ use std::path::Path;
 const ERR_SEC_INTERACTION_NOT_ALLOWED: i32 = -25308;
 const ERR_SEC_INTERACTION_REQUIRED: i32 = -25315;
 const ERR_SEC_AUTH_FAILED: i32 = -25293;
+const ERR_SEC_ITEM_NOT_FOUND: i32 = errSecItemNotFound;
 
 const SERVICE: &str = "pam-passkey";
 const PROBE_SERVICE: &str = "pam-passkey-probe";
@@ -72,9 +73,25 @@ impl fmt::Display for KeychainError {
                 "keychain operation: {error} (OSStatus {})",
                 error.code()
             ),
-            Self::AccessDenied(status) => write!(out, "keychain access denied (OSStatus {status})"),
-            Self::Locked(status) => write!(out, "keychain locked (OSStatus {status})"),
-            Self::NotFound => write!(out, "keychain item not found"),
+            Self::AccessDenied(status) => {
+                let meaning = match *status {
+                    ERR_SEC_INTERACTION_NOT_ALLOWED => "user interaction is not allowed",
+                    ERR_SEC_INTERACTION_REQUIRED => "user interaction is required",
+                    ERR_SEC_AUTH_FAILED => "authorization failed",
+                    _ => "denied",
+                };
+                write!(out, "keychain access denied: {meaning} (OSStatus {status})")
+            }
+            // The status is the lookup's own (often item-not-found); "locked" is the keychain's
+            // unlock state checked after it.
+            Self::Locked(status) => write!(
+                out,
+                "the login keychain is locked (unlock it and retry; the lookup answered OSStatus {status})"
+            ),
+            Self::NotFound => write!(
+                out,
+                "keychain item not found (OSStatus {ERR_SEC_ITEM_NOT_FOUND})"
+            ),
             Self::UnexpectedResult => write!(out, "keychain returned an unexpected item type"),
             Self::Utf8(error) => write!(out, "keychain item is not UTF-8: {error}"),
             Self::CurrentExe(error) => write!(out, "find current executable: {error}"),
@@ -84,14 +101,32 @@ impl fmt::Display for KeychainError {
 
 impl std::error::Error for KeychainError {}
 
+/// The failures told apart by their status alone; `None` for any other status.
+fn classify_status(status: i32) -> Option<KeychainError> {
+    match status {
+        ERR_SEC_ITEM_NOT_FOUND => Some(KeychainError::NotFound),
+        ERR_SEC_INTERACTION_NOT_ALLOWED | ERR_SEC_INTERACTION_REQUIRED | ERR_SEC_AUTH_FAILED => {
+            Some(KeychainError::AccessDenied(status))
+        }
+        _ => None,
+    }
+}
+
 pub struct Keychain {
     handle: SecKeychain,
+    /// Whether a failed lookup may mean "locked" (see `classify`).
+    lockable: bool,
 }
 
 impl Keychain {
+    /// Design rationale: the System Keychain is unlocked by securityd with the system key on
+    /// access, but its lock state as seen from a process can read "locked" (it has
+    /// lock-on-sleep and an idle timeout). Its failures are therefore classified by their
+    /// status alone, so an absent item is "not found" (first setup) rather than "locked".
     pub fn system() -> Result<Self, KeychainError> {
         Ok(Self {
             handle: SecKeychain::open(SYSTEM_PATH).map_err(KeychainError::Open)?,
+            lockable: false,
         })
     }
 
@@ -101,6 +136,7 @@ impl Keychain {
         Ok(Self {
             handle: SecKeychain::open(home.join("Library/Keychains/login.keychain-db"))
                 .map_err(KeychainError::Open)?,
+            lockable: true,
         })
     }
 
@@ -116,22 +152,14 @@ impl Keychain {
 
     fn classify(&self, error: security_framework::base::Error) -> KeychainError {
         let status = error.code();
-        // Security.framework can report item-not-found even while the Keychain is locked.
+        // Security.framework can report item-not-found even while a login keychain is locked.
         // SAFETY: the handle stays alive while Security.framework checks its unlock state.
-        let locked = unsafe { passkey_keychain_is_locked(self.handle.as_concrete_TypeRef()) };
-        if locked == 1 {
+        if self.lockable
+            && unsafe { passkey_keychain_is_locked(self.handle.as_concrete_TypeRef()) } == 1
+        {
             return KeychainError::Locked(status);
         }
-        if status == errSecItemNotFound {
-            return KeychainError::NotFound;
-        }
-        if matches!(
-            status,
-            ERR_SEC_INTERACTION_NOT_ALLOWED | ERR_SEC_INTERACTION_REQUIRED | ERR_SEC_AUTH_FAILED
-        ) {
-            return KeychainError::AccessDenied(status);
-        }
-        KeychainError::Operation(error)
+        classify_status(status).unwrap_or(KeychainError::Operation(error))
     }
 
     fn read(&self, service: &str, account: &str) -> Result<String, KeychainError> {
@@ -263,6 +291,31 @@ mod tests {
             ));
         }
         assert_eq!(Keychain::user_account("kawaz").unwrap(), "users/kawaz");
+    }
+
+    // An absent item is "not found" (first setup creates the keys), never "locked"; the
+    // statuses that mean a refused access say which refusal it was.
+    #[test]
+    fn statuses_classify_by_their_meaning() {
+        assert!(matches!(
+            classify_status(-25300),
+            Some(KeychainError::NotFound)
+        ));
+        for (status, meaning) in [
+            (-25308, "user interaction is not allowed"),
+            (-25315, "user interaction is required"),
+            (-25293, "authorization failed"),
+        ] {
+            let error = classify_status(status).unwrap();
+            assert!(matches!(error, KeychainError::AccessDenied(code) if code == status));
+            assert!(error.to_string().contains(meaning), "{error}");
+        }
+        assert!(classify_status(-61).is_none());
+        let text = KeychainError::NotFound.to_string();
+        assert!(
+            text.contains("not found") && !text.contains("locked"),
+            "{text}"
+        );
     }
 
     // System secrets must be addressed through a fixed enum, not a caller-controlled account.
