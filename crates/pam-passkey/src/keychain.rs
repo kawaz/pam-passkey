@@ -25,6 +25,7 @@ unsafe extern "C" {
         account: *const std::ffi::c_char,
         value: *const u8,
         value_len: usize,
+        replace: std::ffi::c_int,
     ) -> i32;
     fn passkey_keychain_is_locked(keychain: SecKeychainRef) -> i32;
 }
@@ -112,10 +113,15 @@ fn classify_status(status: i32) -> Option<KeychainError> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    System,
+    Login,
+}
+
 pub struct Keychain {
     handle: SecKeychain,
-    /// Whether a failed lookup may mean "locked" (see `classify`).
-    lockable: bool,
+    kind: Kind,
 }
 
 impl Keychain {
@@ -123,10 +129,12 @@ impl Keychain {
     /// access, but its lock state as seen from a process can read "locked" (it has
     /// lock-on-sleep and an idle timeout). Its failures are therefore classified by their
     /// status alone, so an absent item is "not found" (first setup) rather than "locked".
+    /// Its existing items are replaced (deleted and added) rather than updated: updating asks
+    /// for an administrator's authorization even as root, adding does not.
     pub fn system() -> Result<Self, KeychainError> {
         Ok(Self {
             handle: SecKeychain::open(SYSTEM_PATH).map_err(KeychainError::Open)?,
-            lockable: false,
+            kind: Kind::System,
         })
     }
 
@@ -136,7 +144,7 @@ impl Keychain {
         Ok(Self {
             handle: SecKeychain::open(home.join("Library/Keychains/login.keychain-db"))
                 .map_err(KeychainError::Open)?,
-            lockable: true,
+            kind: Kind::Login,
         })
     }
 
@@ -154,7 +162,7 @@ impl Keychain {
         let status = error.code();
         // Security.framework can report item-not-found even while a login keychain is locked.
         // SAFETY: the handle stays alive while Security.framework checks its unlock state.
-        if self.lockable
+        if self.kind == Kind::Login
             && unsafe { passkey_keychain_is_locked(self.handle.as_concrete_TypeRef()) } == 1
         {
             return KeychainError::Locked(status);
@@ -192,6 +200,7 @@ impl Keychain {
                 account.as_ptr(),
                 value.as_ptr(),
                 value.len(),
+                std::ffi::c_int::from(self.kind == Kind::System),
             )
         };
         if status == errSecSuccess {

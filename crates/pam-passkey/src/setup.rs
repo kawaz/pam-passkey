@@ -5,7 +5,7 @@
 use crate::records::{signing_jwk, verification_jwk};
 use crate::settings::{DEFAULT_PAGE_URL, Page, read_optional};
 use crate::store::{Fetched, Store, StoreConfig, StoreError};
-use pam_passkey::keychain::{Keychain, SystemItem};
+use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
 use protocol::encoding::base64url;
 use protocol::placement::secure_path;
 use serde::{Deserialize, Serialize};
@@ -325,16 +325,37 @@ fn write(checked: &Checked) -> Result<(), Box<dyn Error>> {
     let page = Page::parse(&checked.page_url)?;
     Store::new(&checked.store)?;
     let keychain = Keychain::system()?;
-    keychain.write_system(SystemItem::PageUrl, &page.url)?;
-    keychain.write_system(SystemItem::Store, &serde_json::to_string(&checked.store)?)?;
-    keychain.write_system(SystemItem::SendCommand, &checked.send_command)?;
+    // No Keychain dialog may appear behind setup's back: a write that would need one fails
+    // and says so instead.
+    let _no_dialogs =
+        security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()?;
+    let put = |item: SystemItem, name: &str, value: &str| {
+        keychain.write_system(item, value).map_err(|error| match error {
+            KeychainError::AccessDenied(_) => format!(
+                "writing {name} to the System Keychain needs an authorization that setup does not ask for ({error})"
+            ),
+            error => format!("writing {name} to the System Keychain: {error}"),
+        })
+    };
+    put(SystemItem::PageUrl, "page_url", &page.url)?;
+    put(
+        SystemItem::Store,
+        "store",
+        &serde_json::to_string(&checked.store)?,
+    )?;
+    put(
+        SystemItem::SendCommand,
+        "send_command",
+        &checked.send_command,
+    )?;
     if checked.regenerate_key || !signing_key_exists(&keychain)? {
         let mut secret = [0u8; 32];
         security_framework::random::SecRandom::default().copy_bytes(&mut secret)?;
         let key = ed25519_dalek::SigningKey::from_bytes(&secret);
-        keychain.write_system(SystemItem::SigningKey, &signing_jwk(&key))?;
-        keychain.write_system(
+        put(SystemItem::SigningKey, "signing_key", &signing_jwk(&key))?;
+        put(
             SystemItem::VerificationKey,
+            "verification_key",
             &verification_jwk(&key.verifying_key()),
         )?;
         println!("setup: generated a new signing key (register passkeys with `pam-passkey add`)");
