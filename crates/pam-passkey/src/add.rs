@@ -16,10 +16,10 @@ use protocol::encoding::{base64url, format_utc};
 use std::error::Error;
 use std::ffi::{CString, c_char, c_long};
 use std::fmt;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 use std::process::{Child, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// How long the registration URL stays usable (DESIGN 未決事項: 要求の期限の仮の既定 90 秒).
 const LIFETIME: i64 = 90;
@@ -29,6 +29,17 @@ const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Each DELETE after the registration ended.
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the wait reports its progress (the spinner's frame rate).
+const TICK: Duration = Duration::from_millis(100);
+const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
+/// What the wait for the credential reports to the terminal.
+pub enum Progress {
+    /// Still waiting; the registration expires after this long.
+    Waiting(Duration),
+    /// A poll failed; the wait goes on.
+    Warning(String),
+}
 
 unsafe extern "C" {
     fn passkey_owner_authenticate(reason: *const c_char) -> c_long;
@@ -90,11 +101,15 @@ pub struct Enrollment<'a> {
 impl Enrollment<'_> {
     /// PUTs the registration payload, hands `<page_url>#<presigned GET>` to `deliver`, polls
     /// for the credential until `expires`, judges the first one found, and DELETEs both
-    /// objects whatever the ending.
-    pub fn run(&self, deliver: impl FnOnce(&str)) -> Result<Registered, EnrollError> {
+    /// objects whatever the ending. `progress` hears about the wait every [`TICK`].
+    pub fn run(
+        &self,
+        deliver: impl FnOnce(&str),
+        progress: impl FnMut(Progress),
+    ) -> Result<Registered, EnrollError> {
         let registration_key = self.store.key(self.id, "registration");
         let credential_key = self.store.key(self.id, "credential");
-        let ending = self.exchange(&registration_key, &credential_key, deliver);
+        let ending = self.exchange(&registration_key, &credential_key, deliver, progress);
         for key in [&registration_key, &credential_key] {
             if let Err(error) = self.store.delete(key, CLEANUP_TIMEOUT) {
                 eprintln!("pam-passkey: DELETE of {key}: {error}");
@@ -108,6 +123,7 @@ impl Enrollment<'_> {
         registration_key: &str,
         credential_key: &str,
         deliver: impl FnOnce(&str),
+        mut progress: impl FnMut(Progress),
     ) -> Result<Registered, EnrollError> {
         // Presigned URLs last exactly as long as the registration.
         let valid_for =
@@ -135,15 +151,22 @@ impl Enrollment<'_> {
             self.page.url,
             self.store.presign_get(registration_key, valid_for)
         ));
+        let mut next_poll = Instant::now();
         loop {
             let left = self.expires - unix_now();
             if left <= 0 {
                 return Err(EnrollError::Expired);
             }
             let left = Duration::from_secs(left.unsigned_abs());
+            progress(Progress::Waiting(left));
+            if Instant::now() < next_poll {
+                std::thread::sleep(TICK.min(left));
+                continue;
+            }
+            next_poll = Instant::now() + POLL_INTERVAL;
             match self
                 .store
-                .get(credential_key, MAX_CREDENTIAL, REQUEST_TIMEOUT.min(left))
+                .poll(credential_key, MAX_CREDENTIAL, REQUEST_TIMEOUT.min(left))
             {
                 Ok(Fetched::Missing) => {}
                 // The first object found decides; the registration is not waited for again.
@@ -160,11 +183,14 @@ impl Enrollment<'_> {
                     .map_err(EnrollError::Rejected);
                 }
                 Ok(Fetched::TooLarge) => return Err(EnrollError::Rejected(Rejection::TooLarge)),
-                Err(error) => eprintln!("pam-passkey: polling for the credential: {error}"),
+                Err(error) => progress(Progress::Warning(format!(
+                    "pam-passkey: polling for the credential: {error}"
+                ))),
             }
             // Design rationale: an S3-compatible store has no change notification, so the
-            // credential's object is polled, as the helper polls for the assertion.
-            std::thread::sleep(POLL_INTERVAL.min(left));
+            // credential's object is polled every POLL_INTERVAL, as the helper polls for the
+            // assertion; the TICK sleeps in between only pace the progress display.
+            std::thread::sleep(TICK.min(left));
         }
     }
 }
@@ -337,11 +363,34 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
         user_id: &user_id,
         expires: unix_now() + LIFETIME,
     };
+    let terminal = std::io::stderr().is_terminal();
     let mut sent = None;
-    let registered = enrollment.run(|url| {
-        sent = deliver(settings.send_command.as_deref(), url);
-        eprintln!("add: waiting for the passkey...");
-    });
+    let mut frame = 0;
+    let registered = enrollment.run(
+        |url| {
+            sent = deliver(settings.send_command.as_deref(), url);
+            if !terminal {
+                eprintln!("add: waiting for the passkey...");
+            }
+        },
+        // On a terminal one line is rewritten in place: a spinner and the seconds left.
+        |progress| match progress {
+            Progress::Waiting(left) if terminal => {
+                eprint!(
+                    "\r\x1b[K{} waiting for the passkey… {}s",
+                    SPINNER[frame % SPINNER.len()],
+                    left.as_secs()
+                );
+                frame += 1;
+            }
+            Progress::Waiting(_) => {}
+            Progress::Warning(message) if terminal => eprintln!("\r\x1b[K{message}"),
+            Progress::Warning(message) => eprintln!("{message}"),
+        },
+    );
+    if terminal {
+        eprint!("\r\x1b[K");
+    }
     stop(sent);
     let registered = registered?;
 
@@ -420,6 +469,8 @@ mod tests {
         second_put: Option<u16>,
         registration_left: bool,
         credential_left: bool,
+        /// Each `Waiting` report's seconds left, in order.
+        waiting: Vec<u64>,
     }
 
     /// One registration against MinIO, with a page that fetches the payload through the
@@ -479,7 +530,14 @@ mod tests {
             user_id: &[3; 16],
             expires: unix_now() + lifetime,
         };
-        let result = enrollment.run(|url| urls.send(url.to_owned()).unwrap());
+        let mut waiting = Vec::new();
+        let result = enrollment.run(
+            |url| urls.send(url.to_owned()).unwrap(),
+            |progress| match progress {
+                Progress::Waiting(left) => waiting.push(left.as_secs()),
+                Progress::Warning(message) => panic!("{message}"),
+            },
+        );
         let (payload, second_put) = tester.join().unwrap();
         let left = |name| {
             !matches!(
@@ -495,6 +553,7 @@ mod tests {
             second_put,
             registration_left: left("registration"),
             credential_left: left("credential"),
+            waiting,
         }
     }
 
@@ -588,6 +647,11 @@ mod tests {
 
         let expired = round(&minio, "enroll-expired", 2, PageAction::Leave);
         assert_eq!(expired.result, Err(EnrollError::Expired));
+        // The wait reports every tick (about ten a second) with a countdown that never rises,
+        // and polls stay quiet: a missing credential is no warning.
+        assert!(expired.waiting.len() >= 10, "{:?}", expired.waiting);
+        assert!(expired.waiting.windows(2).all(|pair| pair[0] >= pair[1]));
+        assert!(expired.waiting[0] <= 2);
         assert!(!expired.registration_left && !expired.credential_left);
     }
 
@@ -605,7 +669,7 @@ mod tests {
             expires: unix_now() + 30,
         };
         let mut delivered = false;
-        let result = enrollment.run(|_| delivered = true);
+        let result = enrollment.run(|_| delivered = true, |_| {});
         assert!(matches!(result, Err(EnrollError::Store(_))), "{result:?}");
         assert!(!delivered);
     }

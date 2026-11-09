@@ -221,6 +221,19 @@ impl Store {
         Ok(Fetched::Found(body))
     }
 
+    /// GET while waiting for a page's object (the assertion, the credential).
+    ///
+    /// Design rationale: without `s3:ListBucket` AWS answers a GET of a missing object with 403
+    /// instead of 404, and the store's access key is not meant to list the bucket (MANUAL). The
+    /// key was checked by `setup`, so 403 during a wait is read as "not there yet"; the cost is
+    /// that a key revoked later makes the wait run to its deadline without a message.
+    pub fn poll(&self, key: &str, limit: usize, timeout: Duration) -> Result<Fetched, StoreError> {
+        match self.get(key, limit, timeout) {
+            Err(StoreError::Status(403)) => Ok(Fetched::Missing),
+            other => other,
+        }
+    }
+
     /// DELETE; a missing object counts as deleted.
     pub fn delete(&self, key: &str, timeout: Duration) -> Result<(), StoreError> {
         let url = self
@@ -504,5 +517,19 @@ mod tests {
             .replace("/round-trip/object?", "/round-trip/other?");
         assert_eq!(status(page.get(&moved).call()), 403);
         store.delete(&key, timeout).unwrap();
+
+        // A refused GET is an error to `get` but "not there yet" to `poll` (AWS refuses GETs of
+        // missing objects with 403 when the key cannot list the bucket; here: a wrong secret).
+        let refused = Store::new(&StoreConfig {
+            secret: "wrong-secret".into(),
+            ..minio.config(true)
+        })
+        .unwrap();
+        assert!(matches!(
+            refused.get(&key, 16, timeout),
+            Err(StoreError::Status(403))
+        ));
+        assert_eq!(refused.poll(&key, 16, timeout).unwrap(), Fetched::Missing);
+        assert_eq!(store.poll(&key, 16, timeout).unwrap(), Fetched::Missing);
     }
 }

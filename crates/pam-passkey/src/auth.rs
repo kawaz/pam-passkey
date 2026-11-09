@@ -295,7 +295,7 @@ impl Remote<'_> {
         let poll = |left: Duration| {
             match self
                 .store
-                .get(&assertion_key, MAX_ASSERTION, REQUEST_TIMEOUT.min(left))
+                .poll(&assertion_key, MAX_ASSERTION, REQUEST_TIMEOUT.min(left))
             {
                 Ok(Fetched::Missing) => None,
                 // The first object found decides; later overwrites are never read (DR-0006).

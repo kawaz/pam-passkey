@@ -47,6 +47,8 @@ aws iam create-access-key --user-name "$B"
 
 `setup` に渡す値: endpoint `https://s3.<リージョン>.amazonaws.com`、bucket、region、access key と secret。
 
+`s3:ListBucket` は不要。これが無いと AWS はまだ無いオブジェクトの GET に 404 でなく 403 を返すが、pam-passkey は待ちの間の 403 を「まだ無い」として扱う。
+
 ### Cloudflare R2 の例
 
 1. R2 でバケットを作る (公開アクセスは無効のまま)
