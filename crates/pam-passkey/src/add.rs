@@ -265,16 +265,17 @@ fn load_settings(system: &Keychain, login: &Keychain) -> Result<Settings, Box<dy
     let config = match login.read_config() {
         Ok(text) => text,
         Err(KeychainError::NotFound) => {
-            return Err("no settings in your login keychain (run pam-passkey setup)".into());
+            return Err("no settings in your login keychain (run pam-passkey setup --edit)".into());
         }
         Err(error) => return Err(error.into()),
     };
-    let config: Config = serde_json::from_str(&config)
-        .map_err(|error| format!("your settings are not valid (run pam-passkey setup): {error}"))?;
+    let config: Config = serde_json::from_str(&config).map_err(|error| {
+        format!("your settings are not valid (run pam-passkey setup --edit): {error}")
+    })?;
     if !(system.exists_system(SystemItem::SigningKey)?
         && system.exists_system(SystemItem::VerificationKey)?)
     {
-        return Err("no signing key in the System Keychain (run pam-passkey setup)".into());
+        return Err("no signing key in the System Keychain (run pam-passkey setup --edit)".into());
     }
     Ok(Settings {
         page: Page::parse(&config.page_url)?,
@@ -393,15 +394,18 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
     let registered = registered?;
 
     // DR-0011: the signing key is read here alone, after the identity check, in this process.
-    let signing_key = parse_signing_jwk(&system.read_system(SystemItem::SigningKey)?)
-        .ok_or("the signing key in the System Keychain is not usable (run pam-passkey setup)")?;
+    let signing_key = parse_signing_jwk(&system.read_system(SystemItem::SigningKey)?).ok_or(
+        "the signing key in the System Keychain is not usable (run pam-passkey setup --edit)",
+    )?;
     let verification_key = parse_verification_jwk(
         &system.read_system(SystemItem::VerificationKey)?,
     )
-    .ok_or("the verification key in the System Keychain is not usable (run pam-passkey setup)")?;
+    .ok_or(
+        "the verification key in the System Keychain is not usable (run pam-passkey setup --edit)",
+    )?;
     if signing_key.verifying_key() != verification_key {
         return Err(
-            "the System Keychain's signing and verification keys do not match (run pam-passkey setup)"
+            "the System Keychain's signing and verification keys do not match (run pam-passkey setup --edit)"
                 .into(),
         );
     }

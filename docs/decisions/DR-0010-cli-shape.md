@@ -17,7 +17,7 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
   - `--dump`: 今の設定を整形 JSON で標準出力に出す。`secret` は `"***"` に置き換え、`put_once` と `regenerate_key` は出さない。設定が無ければ page_url だけ既定値を入れた雛形を出す。`config` が無く、System Keychain に旧来の `page_url` / `store` / `send_command` の項目があって読めれば、それを雛形の値に使う (その項目は書きも消しもしない)
   - `--stdin`: 標準入力の JSON (1 行でも整形でも) を設定として受ける。`secret` が `"***"` なら今の secret を維持する
   - `--edit`: `--dump` の内容を利用者だけが読める一時ファイルに書いて `$EDITOR` (未設定なら vi) で開き、エディタが正常終了して内容が変わっていれば `--stdin` と同じ処理をする。変わっていなければ何もしない。一時ファイルは終了時に消す
-  - 引数が無い時は、標準入力が tty なら `--edit`、tty でなければヘルプを出す
+  - 引数が無い時はヘルプを出す。`--edit` / `--stdin` / `--dump` のどれかを明示しない実行 (`--module` や `page_url` だけ) はエラーにする
   - `page_url` 引数を省略すると文書の `page_url`、それも無ければ既定の `https://pam-passkey.github.io/` を使う。引数と文書の両方にあって食い違えばエラー
   - 受けた設定は、ユーザ権限で検証し (ストアへの到達、CORS と lifecycle、置き場の検査)、login keychain の `config` に書く (sudo は使わない)。その前に、System Keychain に署名鍵が無い時 (その Mac の最初の `setup`) と `regenerate_key` の時だけ、自分の実行ファイルの絶対パスで `sudo <self> _setup-write` を再実行して鍵を作る。sudo が失敗すれば `config` は書かない
   - `regenerate_key` が true で署名鍵が既にあれば、作り直すと既存の登録が全て無効になる。`--edit` (端末あり) では y/N で確認し、`--stdin` では文書の値を決定として扱い、その旨を 1 行出す

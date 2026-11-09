@@ -1,5 +1,5 @@
 //! `setup` (DR-0010): the settings as one JSON document. `--dump` prints the current ones,
-//! `--stdin` takes a document, `--edit` (the default) opens the current one in `$EDITOR`. The
+//! `--stdin` takes a document, `--edit` opens the current one in `$EDITOR`. The
 //! document is checked and written as the user, to the user's login keychain (`config`, DR-0011);
 //! only creating the System Keychain signing key runs as root (`sudo <self> _setup-write`).
 
@@ -21,12 +21,12 @@ use std::time::Duration;
 pub const HELP: &str = "pam-passkey setup — configure the approval page, the store and send_command
 
 Usage:
-  pam-passkey setup [--edit] [--module <path>] [page_url]
+  pam-passkey setup --edit [--module <path>] [page_url]
   pam-passkey setup --stdin [--module <path>] [page_url]
   pam-passkey setup --dump
 
   --edit              Open the current settings in $EDITOR (vi if unset) and apply them if they
-                      changed (the default with a terminal on standard input)
+                      changed
   --stdin             Apply the settings document read from standard input
   --dump              Print the current settings document (the secret as \"***\")
   --module <path>     Where pam_passkey.so is, only if not at the default
@@ -496,6 +496,10 @@ enum Mode {
 }
 
 pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
+    if args.is_empty() {
+        print!("{HELP}");
+        return Ok(());
+    }
     let mut mode = None;
     let mut module = None;
     let mut page_argument = None;
@@ -524,24 +528,27 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             return Err("give one of --edit, --stdin and --dump".into());
         }
     }
+    let Some(mode) = mode else {
+        return Err("give one of --edit, --stdin and --dump; run pam-passkey setup --help".into());
+    };
     let (_, login) = own_keychain()?;
     // --stdin needs the current settings only for a "***" secret; without them that is refused.
     let current = match Current::read(&login) {
         Ok(current) => current,
-        Err(error) if mode == Some(Mode::Stdin) => {
+        Err(error) if mode == Mode::Stdin => {
             eprintln!("setup: could not read the current settings ({error})");
             Current::default()
         }
         Err(error) => return Err(error),
     };
     let text = match mode {
-        Some(Mode::Dump) => {
+        Mode::Dump => {
             if module.is_some() || page_argument.is_some() {
                 return Err("--dump takes no other arguments".into());
             }
             if !current.stored {
                 eprintln!(
-                    "setup: your login keychain has no settings yet; this is {} (run pam-passkey setup to store them)",
+                    "setup: your login keychain has no settings yet; this is {} (run pam-passkey setup --edit to store them)",
                     if current.store.is_some() {
                         "what an earlier setup left in the System Keychain"
                     } else {
@@ -552,12 +559,8 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             print!("{}", dump(&current));
             return Ok(());
         }
-        Some(Mode::Stdin) => read_document(std::io::stdin().lock())?,
-        Some(Mode::Edit) | None => {
-            if mode.is_none() && !std::io::stdin().is_terminal() {
-                print!("{HELP}");
-                return Ok(());
-            }
+        Mode::Stdin => read_document(std::io::stdin().lock())?,
+        Mode::Edit => {
             let original = dump(&current);
             let edited = edit(&original, &editor())?;
             match to_apply(original, edited, &current) {
@@ -599,7 +602,7 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     // DR-0010: replacing an existing key invalidates every registration; with a terminal the
     // user confirms it, a document on standard input is taken as the decision.
     if checked.regenerate_key && signing_key_exists(&Keychain::system()?)? {
-        if mode != Some(Mode::Stdin) && std::io::stdin().is_terminal() {
+        if mode != Mode::Stdin && std::io::stdin().is_terminal() {
             if !confirm(
                 "regenerate_key is true: a new signing key invalidates every registered passkey. Continue?",
             )? {

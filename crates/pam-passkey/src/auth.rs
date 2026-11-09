@@ -558,7 +558,7 @@ pub fn user_settings(
     let records = items.records.ok_or(UnavailableReason::NoCredentials)?;
     let Some(config) = items.config else {
         warn(&format!(
-            "no settings for user {user} (run pam-passkey setup as {user})"
+            "no settings for user {user} (run pam-passkey setup --edit as {user})"
         ));
         return Err(UnavailableReason::StoreUnreachable);
     };

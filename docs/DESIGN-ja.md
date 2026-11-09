@@ -150,7 +150,7 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 
 | サブコマンド | 用途 |
 |---|---|
-| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | 自ユーザの設定 (login keychain の `config`) の初期設定と変更。初回だけ System Keychain に署名鍵を作るため sudo を使う。設定は 1 つの JSON 文書で、`--dump` で今の設定を出し (secret は `***`)、`--stdin` で受け、`--edit` (既定) で `$EDITOR` で編集する。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。`store` と `send_command` を受け取り、ストアへの到達を確かめ、バケットの CORS と lifecycle を設定し、置き場の所有権を検査する |
+| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | 自ユーザの設定 (login keychain の `config`) の初期設定と変更。初回だけ System Keychain に署名鍵を作るため sudo を使う。設定は 1 つの JSON 文書で、`--dump` で今の設定を出し (secret は `***`)、`--stdin` で受け、`--edit` で `$EDITOR` で編集する (引数なしの `setup` はヘルプを出す)。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。`store` と `send_command` を受け取り、ストアへの到達を確かめ、バケットの CORS と lifecycle を設定し、置き場の所有権を検査する |
 | `add [label]` | passkey を登録する (本人確認を求める)。label の既定は登録日時 |
 | `list` | 自ユーザの passkey を一覧する (label、credential id、登録日) |
 | `del <label\|id>` | passkey を削除する |

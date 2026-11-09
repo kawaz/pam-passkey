@@ -61,12 +61,12 @@ R2 で CORS の設定が API から通らない場合は、`setup` が表示す�
 
 ```sh
 just install                                   # ビルドと Developer ID 署名、root 所有の場所へ配置
-pam-passkey setup                              # 設定を $EDITOR で開く
+pam-passkey setup --edit                       # 設定を $EDITOR で開く
 ```
 
 `.so` を既定の `/usr/local/lib/pam/pam_passkey.so` と違う場所に置いた時だけ `--module <path>` でその場所を渡す (置き場の所有権を検査する)。
 
-`setup` は実行したユーザ自身の設定を 1 つの JSON 文書として扱い、そのユーザの login keychain に置く (`sudo` を付けずに実行する)。設定はユーザごとなので、passkey を使うユーザはそれぞれ `setup` を実行する。引数なしで実行すると今の設定 (初回は雛形) が `$EDITOR` (未設定なら vi) で開くので、書き換えて保存して閉じる。内容が変わっていれば検証して書き込み、変わっていなければ何もしない。その Mac で最初の `setup` だけは、System Keychain に署名鍵を作るために `sudo` のパスワードを聞かれる。
+`setup` は実行したユーザ自身の設定を 1 つの JSON 文書として扱い、そのユーザの login keychain に置く (`sudo` を付けずに実行する)。設定はユーザごとなので、passkey を使うユーザはそれぞれ `setup` を実行する。`pam-passkey setup --edit` で今の設定 (初回は雛形) が `$EDITOR` (未設定なら vi) で開くので、書き換えて保存して閉じる。内容が変わっていれば検証して書き込み、変わっていなければ何もしない。その Mac で最初の `setup` だけは、System Keychain に署名鍵を作るために `sudo` のパスワードを聞かれる。
 
 ```json
 {
@@ -135,4 +135,4 @@ auth       sufficient     /usr/local/lib/pam/pam_passkey.so
 - ダイアログが出ない / すぐパスワードになる: `/usr/local/libexec/pam-passkey` と `.so` が root 所有で Developer ID 署名か、`setup` を済ませているかを確認する
 - ssh 経由の sudo では Touch ID もリモート承認も使えない (login keychain が unlock されていないため)。パスワードになる
 - 何が起きたか見たい: モジュールと helper は unified logging に要求 ID ごとの経過 (Touch ID の結果コード、helper の起動、unavailable の理由、ストアへの PUT / DELETE、PAM の戻り値。秘密と URL は出さない) を残す。`log show --predicate 'subsystem == "jp.kawaz.pam-passkey"' --last 5m` で見る
-- 登録を全部やり直したい: `pam-passkey setup` で `"regenerate_key": true` を足して署名鍵を作り直す (全ユーザの登録が無効になる)
+- 登録を全部やり直したい: `pam-passkey setup --edit` で `"regenerate_key": true` を足して署名鍵を作り直す (全ユーザの登録が無効になる)

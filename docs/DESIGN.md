@@ -150,7 +150,7 @@ Everything else (polling interval, button labels) is a code default.
 
 | Subcommand | Purpose |
 |---|---|
-| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | Initial setup and changes of the user's own settings (`config` in the login keychain). Only the first run uses sudo, to create the signing key in the System Keychain. The settings are one JSON document: `--dump` prints the current one (the secret as `***`), `--stdin` takes one, and `--edit` (the default) edits it in `$EDITOR`. If `page_url` is omitted, the default `https://pam-passkey.github.io/` is used. Takes `store` and `send_command`, checks that the store is reachable, sets the CORS and lifecycle of the bucket, and checks the ownership of the install locations |
+| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | Initial setup and changes of the user's own settings (`config` in the login keychain). Only the first run uses sudo, to create the signing key in the System Keychain. The settings are one JSON document: `--dump` prints the current one (the secret as `***`), `--stdin` takes one, and `--edit` edits it in `$EDITOR` (without arguments `setup` shows its help). If `page_url` is omitted, the default `https://pam-passkey.github.io/` is used. Takes `store` and `send_command`, checks that the store is reachable, sets the CORS and lifecycle of the bucket, and checks the ownership of the install locations |
 | `add [label]` | Enroll a passkey (asks for identity verification). The default label is the enrollment date and time |
 | `list` | List your own passkeys (label, credential id, enrollment date) |
 | `del <label\|id>` | Delete a passkey |
