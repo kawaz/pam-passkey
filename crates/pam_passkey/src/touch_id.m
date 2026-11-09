@@ -19,12 +19,36 @@
 
 static const LAPolicy policy = LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion;
 
-void *passkey_touch_id_create(void) {
+static NSString *first_language(NSString *path) {
+    NSDictionary *preferences = [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:path] error:nil];
+    id languages = preferences[@"AppleLanguages"];
+    if (![languages isKindOfClass:[NSArray class]] || [languages count] == 0) return nil;
+    id first = languages[0];
+    return [first isKindOfClass:[NSString class]] ? first : nil;
+}
+
+// 1 if the first of the user's preferred languages (AppleLanguages in <home>'s global
+// preferences, else the system's) is Japanese, otherwise 0. The file is read directly rather
+// than through CFPreferences: the module runs inside a setuid caller on behalf of PAM_USER.
+int passkey_prefers_japanese(const char *home) {
+    @autoreleasepool {
+        NSString *language = nil;
+        NSString *directory = home ? [NSString stringWithUTF8String:home] : nil;
+        if (directory.length) {
+            language = first_language([directory stringByAppendingPathComponent:@"Library/Preferences/.GlobalPreferences.plist"]);
+        }
+        if (!language) language = first_language(@"/Library/Preferences/.GlobalPreferences.plist");
+        return [language hasPrefix:@"ja"] ? 1 : 0;
+    }
+}
+
+// The dialog's buttons in English, or in Japanese for a user who prefers it.
+void *passkey_touch_id_create(int japanese) {
     @autoreleasepool {
         PasskeyTouchID *touch = [[PasskeyTouchID alloc] init];
         touch.context = [[LAContext alloc] init];
-        touch.context.localizedFallbackTitle = @"詳細を確認";
-        touch.context.localizedCancelTitle = @"キャンセル";
+        touch.context.localizedFallbackTitle = japanese ? @"詳細を確認" : @"Show details";
+        touch.context.localizedCancelTitle = japanese ? @"キャンセル" : @"Cancel";
         touch.completed = dispatch_semaphore_create(0);
         touch.code = LAErrorAuthenticationFailed;
         return (void *)CFBridgingRetain(touch);

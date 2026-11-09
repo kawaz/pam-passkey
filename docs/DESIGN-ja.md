@@ -72,7 +72,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 
 - 呼び出し元が setuid プロセス (sudo 等) の場合、AppKit を PAM モジュール内で初期化できない (初期化時にプロセスごと exit する)。ブラウザで承認ページを開いて前面に出す処理は helper 側で行う ([findings](./findings/2026-11-02-pam-poc.md))
 - `LAContext` は euid の生体登録状態を見るので、評価の間だけ `PAM_USER` の uid に `seteuid` で落とし、終わったら `seteuid(0)` で戻す。`seteuid` はプロセス全体に効くので、プロセス情報の収集と helper の spawn を済ませてから落とす。戻せなければ `PAM_AUTH_ERR` ([DR-0012](./decisions/DR-0012-auth-state-transitions.md))
-- policy は `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion` (Apple Watch での承認も通る)。fallback ボタンは `localizedFallbackTitle` で「詳細を確認」に差し替え、押下は `LAErrorUserFallback` (-3) で拾う
+- policy は `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion` (Apple Watch での承認も通る)。fallback ボタンは `localizedFallbackTitle` で「詳細を確認」に差し替え (ボタンの文言は英語既定の `Show details` / `Cancel`。`PAM_USER` の第一言語が日本語なら「詳細を確認」/「キャンセル」)、押下は `LAErrorUserFallback` (-3) で拾う
 - ダイアログ本文は `localizedReason` の長さ制限に合わせ、末尾でなく中央を省略する (先頭と末尾を残す)
 - モジュールはプロセスを落とさない。モジュールの不具合で sudo が通らず setup もできなくなる事態 (ハシゴ外し) の歯止めは、失敗が後続のパスワード認証に流れること
 - 使う passkey と Touch ID の生体は `PAM_USER` のもの。`users/<PAM_USER>` の項目を読み、`LAContext` は `PAM_USER` の uid で評価し、`send_command` / 承認ページを開く子も `PAM_USER` に降格する。`PAM_USER` が root (sudoers の `targetpw` 等) なら passkey も生体も無く、パスワードへ落ちる ([DR-0012](./decisions/DR-0012-auth-state-transitions.md))

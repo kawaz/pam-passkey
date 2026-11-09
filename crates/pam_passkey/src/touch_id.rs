@@ -3,11 +3,14 @@
 
 use libc::{c_char, c_int, c_long, c_void, uid_t};
 use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 unsafe extern "C" {
-    fn passkey_touch_id_create() -> *mut c_void;
+    fn passkey_touch_id_create(japanese: c_int) -> *mut c_void;
+    fn passkey_prefers_japanese(home: *const c_char) -> c_int;
     fn passkey_touch_id_can_evaluate(handle: *mut c_void) -> c_long;
     fn passkey_touch_id_begin(handle: *mut c_void, reason: *const c_char) -> c_int;
     fn passkey_touch_id_wait(handle: *mut c_void) -> c_long;
@@ -31,9 +34,9 @@ unsafe impl Send for Dialog {}
 unsafe impl Sync for Dialog {}
 
 impl Dialog {
-    fn create() -> Option<Self> {
+    fn create(japanese: bool) -> Option<Self> {
         // SAFETY: the shim returns a retained object or NULL.
-        let handle = unsafe { passkey_touch_id_create() };
+        let handle = unsafe { passkey_touch_id_create(c_int::from(japanese)) };
         (!handle.is_null()).then_some(Self(handle))
     }
 }
@@ -102,6 +105,7 @@ impl Round {
     /// euid 0, `None` to evaluate with the caller's own credentials.
     pub fn start(
         drop_to: Option<uid_t>,
+        japanese: bool,
         reason: CString,
         report: impl Fn(Report) + Send + 'static,
     ) -> Self {
@@ -123,7 +127,7 @@ impl Round {
                 }
                 euid.dropped = true;
             }
-            let answer = evaluate(&round, &reason, &report);
+            let answer = evaluate(&round, japanese, &reason, &report);
             let restored = euid.restore();
             report(Report::Ended { answer, restored });
         });
@@ -153,8 +157,13 @@ fn lock(state: &Mutex<RoundState>) -> std::sync::MutexGuard<'_, RoundState> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn evaluate(shared: &Shared, reason: &CString, report: &impl Fn(Report)) -> Option<c_long> {
-    let dialog = Arc::new(Dialog::create()?);
+fn evaluate(
+    shared: &Shared,
+    japanese: bool,
+    reason: &CString,
+    report: &impl Fn(Report),
+) -> Option<c_long> {
+    let dialog = Arc::new(Dialog::create(japanese)?);
     // SAFETY: the handle is alive for the whole function.
     if unsafe { passkey_touch_id_can_evaluate(dialog.0) } != 0 {
         return None;
@@ -173,6 +182,16 @@ fn evaluate(shared: &Shared, reason: &CString, report: &impl Fn(Report)) -> Opti
     report(Report::Started);
     // SAFETY: the evaluation was started above, so the semaphore is signalled exactly once.
     Some(unsafe { passkey_touch_id_wait(dialog.0) })
+}
+
+/// Whether the dialog's buttons are shown in Japanese: the first of the preferred languages of
+/// the user whose home is `home` (falling back to the system's) is Japanese. English otherwise.
+pub fn prefers_japanese(home: &Path) -> bool {
+    let Ok(home) = CString::new(home.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: the path is NUL-terminated and outlives the call.
+    unsafe { passkey_prefers_japanese(home.as_ptr()) == 1 }
 }
 
 fn is_bidi_control(ch: char) -> bool {
@@ -228,6 +247,54 @@ fn shorten_middle(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn home_with_languages(languages: &str) -> std::path::PathBuf {
+        let template = CString::new(
+            std::env::temp_dir()
+                .join("pam-passkey-languages.XXXXXX")
+                .as_os_str()
+                .as_bytes(),
+        )
+        .unwrap();
+        let raw = template.into_raw();
+        // SAFETY: mkdtemp rewrites the NUL-terminated template in place; `raw` is reclaimed once.
+        let made = unsafe { libc::mkdtemp(raw) };
+        let home = unsafe { CString::from_raw(raw) };
+        assert!(!made.is_null());
+        let home = std::path::PathBuf::from(home.into_string().unwrap());
+        let preferences = home.join("Library/Preferences");
+        std::fs::create_dir_all(&preferences).unwrap();
+        std::fs::write(
+            preferences.join(".GlobalPreferences.plist"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>AppleLanguages</key><array>{languages}</array></dict></plist>"#
+            ),
+        )
+        .unwrap();
+        home
+    }
+
+    // The buttons follow the first preferred language of PAM_USER, not the process's own.
+    #[test]
+    fn language_is_the_users_first_preference() {
+        for (languages, japanese) in [
+            ("<string>ja-JP</string><string>en-US</string>", true),
+            ("<string>ja</string>", true),
+            ("<string>en-US</string><string>ja-JP</string>", false),
+            ("<string>fr-FR</string>", false),
+        ] {
+            let home = home_with_languages(languages);
+            assert_eq!(prefers_japanese(&home), japanese, "{languages}");
+            std::fs::remove_dir_all(home).unwrap();
+        }
+        // Without the user's setting the system's applies.
+        let system = prefers_japanese(Path::new("/nonexistent"));
+        let home = home_with_languages("");
+        assert_eq!(prefers_japanese(&home), system);
+        std::fs::remove_dir_all(home).unwrap();
+    }
 
     // The command is its own paragraph after the OS lead-in: one empty line, then the command.
     #[test]

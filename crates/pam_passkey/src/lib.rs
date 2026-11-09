@@ -12,7 +12,8 @@ use machine::{Action, Input, Machine, Outcome};
 use protocol::encoding::{base64url, format_utc};
 use protocol::{HelperCommand, HelperEvent, HelperInput, RequestDetails};
 use std::ffi::{CStr, CString};
-use std::path::Path;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use touch_id::{LA_USER_CANCEL, LA_USER_FALLBACK, Report as TouchReport, Round};
@@ -163,8 +164,8 @@ fn pam_string(pamh: *mut PamHandle, item_type: c_int) -> Option<String> {
     text.to_str().ok().map(str::to_owned)
 }
 
-/// uid of a user name from the user database.
-fn uid_of(user: &str) -> Option<uid_t> {
+/// uid and home directory of a user name from the user database.
+fn user_of(user: &str) -> Option<(uid_t, PathBuf)> {
     let name = CString::new(user).ok()?;
     // SAFETY: getpwnam_r writes into the provided struct and buffer only.
     unsafe {
@@ -178,7 +179,11 @@ fn uid_of(user: &str) -> Option<uid_t> {
             storage.len(),
             &mut result,
         );
-        (rc == 0 && !result.is_null()).then_some(pwd.pw_uid)
+        if rc != 0 || result.is_null() || pwd.pw_dir.is_null() {
+            return None;
+        }
+        let home = std::ffi::OsStr::from_bytes(CStr::from_ptr(pwd.pw_dir).to_bytes());
+        Some((pwd.pw_uid, PathBuf::from(home)))
     }
 }
 
@@ -265,6 +270,8 @@ struct Driver {
     open_due: bool,
     helper: Option<helper::Helper>,
     plan: Option<Option<uid_t>>,
+    /// The dialog's buttons in Japanese (PAM_USER prefers it) or English.
+    japanese: bool,
     reason: CString,
     id: String,
     deadline: Instant,
@@ -277,9 +284,14 @@ impl Driver {
             return;
         };
         let sender = self.sender.clone();
-        self.round = Some(Round::start(plan, self.reason.clone(), move |report| {
-            let _ = sender.send(Event::Touch(report));
-        }));
+        self.round = Some(Round::start(
+            plan,
+            self.japanese,
+            self.reason.clone(),
+            move |report| {
+                let _ = sender.send(Event::Touch(report));
+            },
+        ));
         self.round_live = true;
     }
 
@@ -410,10 +422,12 @@ unsafe fn authenticate(
         return PAM_IGNORE;
     }
     let user = user.to_owned();
-    let Some(pam_uid) = uid_of(&user) else {
+    let Some((pam_uid, pam_home)) = user_of(&user) else {
         return PAM_IGNORE;
     };
     let plan = touch_plan(pam_uid);
+    // Read as the caller (root) before any drop; only a dialog needs it.
+    let japanese = plan.is_some() && touch_id::prefers_japanese(&pam_home);
 
     // 2. Process information, while the euid is still the caller's.
     let processes = process::ancestry();
@@ -478,6 +492,7 @@ unsafe fn authenticate(
         open_due: false,
         helper,
         plan,
+        japanese,
         reason,
         id,
         deadline,

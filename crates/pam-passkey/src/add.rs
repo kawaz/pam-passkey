@@ -1,7 +1,8 @@
 //! `add [label]` (DR-0011): the user's identity check, the registration through the store and
 //! the page, the credential's acceptance, and the signed record in the login keychain.
 
-use crate::child::RunAs;
+use crate::child::{RunAs, current_user};
+use crate::language::prefers_japanese;
 use crate::passkeys::{self, own_keychain};
 use crate::records::{
     EcPublicJwk, PasskeyRecord, parse_signing_jwk, parse_verification_jwk, sign_record,
@@ -16,6 +17,7 @@ use std::error::Error;
 use std::ffi::{CString, c_char, c_long};
 use std::fmt;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Child, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -205,11 +207,18 @@ fn local_label(unix_seconds: i64) -> String {
     )
 }
 
+/// The identity check's text, after the OS lead-in ("<app> is trying to ...").
+fn owner_reason(user: &str, japanese: bool) -> String {
+    if japanese {
+        format!("{user} の passkey を登録します (スマホやこの Mac からの sudo の承認用)")
+    } else {
+        format!("register a passkey for {user} (sudo approvals from a phone or this Mac)")
+    }
+}
+
 /// DR-0011 手順 1: Touch ID, or the login password on a Mac without it.
-fn confirm_owner(user: &str) -> Result<(), Box<dyn Error>> {
-    let reason = CString::new(format!(
-        "register a passkey for {user} (sudo approvals from a phone or this Mac)"
-    ))?;
+fn confirm_owner(user: &str, home: &Path) -> Result<(), Box<dyn Error>> {
+    let reason = CString::new(owner_reason(user, prefers_japanese(home)))?;
     // SAFETY: the reason is NUL-terminated and outlives the call.
     match unsafe { passkey_owner_authenticate(reason.as_ptr()) } {
         0 => Ok(()),
@@ -316,7 +325,7 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
     // created if it cannot be (locked, denied).
     passkeys::read(&login, &user)?;
     let store = Store::new(&settings.store)?;
-    confirm_owner(&user)?;
+    confirm_owner(&user, &current_user()?.1)?;
 
     let id = base64url(&random::<16>()?);
     let user_id = random::<16>()?;
@@ -374,6 +383,13 @@ mod tests {
     use crate::test_support::{Authenticator, RegistrationDraft, record_signer};
     use protocol::encoding::{base64url_decode, parse_utc};
     use std::sync::mpsc::channel;
+
+    // The identity check names the user in the dialog's language.
+    #[test]
+    fn owner_reason_follows_the_language() {
+        assert!(owner_reason("kawaz", false).starts_with("register a passkey for kawaz"));
+        assert!(owner_reason("kawaz", true).starts_with("kawaz の passkey を登録します"));
+    }
 
     // The default label is the local time to the minute.
     #[test]

@@ -2,6 +2,7 @@ mod add;
 mod auth;
 mod cbor;
 mod child;
+mod language;
 mod passkeys;
 mod records;
 mod settings;
@@ -55,7 +56,7 @@ const PROBE_VALUE: &str = "pam-passkey-keychain-probe-2026";
 unsafe extern "C" {
     fn passkey_open_url(url: *const c_char) -> i32;
     fn passkey_activate_handler(url: *const c_char) -> i32;
-    fn passkey_touch_id_create() -> *mut std::ffi::c_void;
+    fn passkey_touch_id_create(japanese: std::ffi::c_int) -> *mut std::ffi::c_void;
     fn passkey_touch_id_can_evaluate(handle: *mut std::ffi::c_void) -> std::ffi::c_long;
     fn passkey_touch_id_begin(handle: *mut std::ffi::c_void, reason: *const c_char) -> i32;
     fn passkey_touch_id_wait(handle: *mut std::ffi::c_void) -> std::ffi::c_long;
@@ -70,9 +71,10 @@ fn probe_dialog(reason: &str) -> Result<(), Box<dyn Error>> {
         return Err("run as the user whose Touch ID is evaluated, without sudo".into());
     }
     let reason = CString::new(reason)?;
+    let japanese = language::prefers_japanese(&current_user()?.1);
     // SAFETY: the handle is created, used and released here; the reason outlives begin.
     unsafe {
-        let handle = passkey_touch_id_create();
+        let handle = passkey_touch_id_create(std::ffi::c_int::from(japanese));
         if handle.is_null() {
             return Err("could not create an LAContext".into());
         }
@@ -92,7 +94,7 @@ fn probe_dialog(reason: &str) -> Result<(), Box<dyn Error>> {
                 0 => "success",
                 -1 => "authentication failed",
                 -2 => "cancel",
-                -3 => "fallback (詳細を確認)",
+                -3 => "fallback (Show details)",
                 -4 => "system cancel",
                 -8 => "biometry lockout",
                 _ => "other LAError",
