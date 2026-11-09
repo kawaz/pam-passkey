@@ -23,7 +23,7 @@ PAM モジュールから呼ばれる helper と、設定・passkey 管理の機
   - `regenerate_key` が true で署名鍵が既にあれば、作り直すと既存の登録が全て無効になる。`--edit` (端末あり) では y/N で確認し、`--stdin` では文書の値を決定として扱い、その旨を 1 行出す
   - ストアへの到達を確かめ、バケットの CORS と lifecycle ルール ([DR-0006](./DR-0006-approval-url-and-exchange.md)) を設定する。CORS の `AllowedHeaders` には `If-None-Match` を含める。権限が無ければエラーで止まり、必要な設定を表示する
   - 疎通確認で、`If-None-Match: *` を付けた同じキーへの 2 回目の PUT が 412 になるかを試し、結果を `store` 設定の `put_once` (true / false) に持つ ([DR-0005](./DR-0005-s3-compatible-store.md))。`put_once` は `setup` が判定する値で、文書では渡せない (渡されても無視する)
-  - 自分の実行ファイルの置き場を [DR-0003](./DR-0003-helper-outside-sudo.md) の基準で検査する。`.so` の置き場は `--module <path>` が与えられた時だけ検査する
+  - 自分の実行ファイルの置き場を [DR-0003](./DR-0003-helper-outside-sudo.md) の基準で検査する。`.so` の置き場は `--module <path>` で与えられた場所、無ければ既定の `/usr/local/lib/pam/pam_passkey.so` が存在する時にそれを検査する
 - `add` の label の既定値は登録日時 (`YYYY-MM-DD HH:MM`)。label は一意でなくてよい
 - `del` は引数が credential id に一致すればそれを優先する。label が複数の passkey に一致したらエラーで止まり、候補を出す
 - `list` は label、credential id、登録日を出す。JWS の検証はしない

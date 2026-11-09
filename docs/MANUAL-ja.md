@@ -61,8 +61,10 @@ R2 で CORS の設定が API から通らない場合は、`setup` が表示す�
 
 ```sh
 just install                                   # ビルドと Developer ID 署名、root 所有の場所へ配置
-pam-passkey setup --module /usr/local/lib/pam/pam_passkey.so   # 設定を $EDITOR で開く
+pam-passkey setup                              # 設定を $EDITOR で開く
 ```
+
+`.so` を既定の `/usr/local/lib/pam/pam_passkey.so` と違う場所に置いた時だけ `--module <path>` でその場所を渡す (置き場の所有権を検査する)。
 
 `setup` は設定を 1 つの JSON 文書として扱う。引数なしで実行すると今の設定 (初回は雛形) が `$EDITOR` (未設定なら vi) で開くので、書き換えて保存して閉じる。内容が変わっていれば検証して書き込み、変わっていなければ何もしない。書き込みの瞬間だけ `sudo` で自分を再実行する。
 

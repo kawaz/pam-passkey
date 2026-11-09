@@ -27,7 +27,8 @@ Usage:
                       changed (the default with a terminal on standard input)
   --stdin             Apply the settings document read from standard input
   --dump              Print the current settings document (the secret as \"***\")
-  --module <path>     Also check the placement of pam_passkey.so at <path>
+  --module <path>     Where pam_passkey.so is, only if not at the default
+                      /usr/local/lib/pam/pam_passkey.so (its placement is checked too)
   page_url            The approval / registration page; must agree with the document's page_url
                       if both are given (default: https://pam-passkey.github.io/)
 
@@ -57,6 +58,8 @@ through sudo.
 /// Each store request during setup; setup is interactive, not on PAM's deadline.
 const STORE_TIMEOUT: Duration = Duration::from_secs(15);
 const SUDO: &str = "/usr/bin/sudo";
+/// Where `just install` puts the module; checked when present and no `--module` is given.
+const DEFAULT_MODULE: &str = "/usr/local/lib/pam/pam_passkey.so";
 /// What `--dump` writes for the secret, and what keeps the current secret on input.
 const SECRET_PLACEHOLDER: &str = "***";
 /// The editor when `$EDITOR` is unset or empty.
@@ -492,6 +495,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         }
     };
     let input = parse(&text, &current)?;
+    let module = module.or_else(|| {
+        let default = PathBuf::from(DEFAULT_MODULE);
+        default.exists().then_some(default)
+    });
     let executable = check_placement(module.as_deref())?;
     let (checked, unsupported) = check(input, page_argument.as_deref())?;
     eprintln!(
