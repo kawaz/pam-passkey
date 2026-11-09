@@ -1,11 +1,11 @@
 ---
 title: send_command に URL だけでなく要求の要約も渡す
-status: open
+status: wip
 category: task
 created: 2026-11-09T12:55:19+09:00
 last_read:
 open_entered: 2026-11-09T12:55:19+09:00
-wip_entered:
+wip_entered: 2026-11-09T15:43:10+09:00
 blocked_entered:
 pending_entered:
 discarded_entered:
