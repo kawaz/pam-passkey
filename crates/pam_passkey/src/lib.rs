@@ -83,6 +83,15 @@ enum Event {
 }
 
 /// Sends one `PAM_TEXT_INFO` message, split into messages of at most `PAM_MAX_MSG_SIZE` bytes.
+/// The tty line that carries the approval URL when there is no send_command (DR-0008).
+fn approval_message(url: &str, japanese: bool) -> String {
+    if japanese {
+        format!("pam-passkey: 承認 URL: {url}")
+    } else {
+        format!("pam-passkey: approval URL: {url}")
+    }
+}
+
 fn inform(conv: &PamConv, text: &str) {
     let Some(send) = conv.conv else {
         return;
@@ -270,7 +279,7 @@ struct Driver {
     open_due: bool,
     helper: Option<helper::Helper>,
     plan: Option<Option<uid_t>>,
-    /// The dialog's buttons in Japanese (PAM_USER prefers it) or English.
+    /// The dialog's buttons and the tty message in Japanese (PAM_USER prefers it) or English.
     japanese: bool,
     reason: CString,
     id: String,
@@ -344,7 +353,7 @@ impl Driver {
             Event::Helper(helper::Report::Event(HelperEvent::Url { url })) => {
                 if let Some(conv) = self.conv {
                     // SAFETY: the conversation belongs to the ongoing pam_sm_authenticate call.
-                    inform(unsafe { &*conv }, &format!("pam-passkey: 承認 URL: {url}"));
+                    inform(unsafe { &*conv }, &approval_message(&url, self.japanese));
                 }
                 None
             }
@@ -426,8 +435,8 @@ unsafe fn authenticate(
         return PAM_IGNORE;
     };
     let plan = touch_plan(pam_uid);
-    // Read as the caller (root) before any drop; only a dialog needs it.
-    let japanese = plan.is_some() && touch_id::prefers_japanese(&pam_home);
+    // Read as the caller (root) before any drop: the dialog's buttons and the tty message.
+    let japanese = touch_id::prefers_japanese(&pam_home);
 
     // 2. Process information, while the euid is still the caller's.
     let processes = process::ancestry();
@@ -542,6 +551,20 @@ pub extern "C" fn pam_sm_setcred(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The tty line keeps the URL whole in either language.
+    #[test]
+    fn approval_message_follows_the_language() {
+        let url = "https://pam-passkey.github.io/#https://store.example/x?a=1&b=2";
+        assert_eq!(
+            approval_message(url, false),
+            format!("pam-passkey: approval URL: {url}")
+        );
+        assert_eq!(
+            approval_message(url, true),
+            format!("pam-passkey: 承認 URL: {url}")
+        );
+    }
 
     // Only `helper=<absolute path>` is understood; anything else must not silently pick a binary.
     #[test]
