@@ -218,11 +218,12 @@ fn request_id() -> String {
 
 /// How Touch ID runs for this request (DR-0012): `None` if it cannot be used,
 /// `Some(Some(uid))` to evaluate with the euid dropped to PAM_USER, `Some(None)` to evaluate as is.
+///
+/// Design rationale: whether a dialog can be shown is decided by trying it
+/// (`canEvaluatePolicy`, then `evaluatePolicy`), not by the session's attributes beforehand:
+/// LocalAuthentication shows its dialog from processes outside the graphical login session
+/// (observed from a launchd-started tree), which a graphic-access check would have refused.
 fn touch_plan(pam_uid: uid_t) -> Option<Option<uid_t>> {
-    // SAFETY: the session shim only reads the caller's own security and audit session.
-    if unsafe { passkey_gui_session_of(pam_uid) } != 1 {
-        return None;
-    }
     // SAFETY: getuid / geteuid have no preconditions.
     let (uid, euid) = unsafe { (libc::getuid(), libc::geteuid()) };
     if euid == 0 {
@@ -235,16 +236,48 @@ fn touch_plan(pam_uid: uid_t) -> Option<Option<uid_t>> {
     }
 }
 
-fn touch_input(answer: Option<libc::c_long>, restored: bool) -> Input {
+/// LAError codes of a dialog that could not be shown or used here, as opposed to an answer
+/// from the user: system cancel (-4), passcode not set (-5), biometry not available (-6),
+/// not enrolled (-7), not interactive (-1004).
+const TOUCH_UNUSABLE: [libc::c_long; 5] = [-4, -5, -6, -7, -1004];
+
+fn touch_input(answer: Result<libc::c_long, Option<libc::c_long>>, restored: bool) -> Input {
     if !restored {
         return Input::EuidNotRestored;
     }
     match answer {
-        None => Input::TouchUnavailable,
-        Some(0) => Input::TouchSucceeded,
-        Some(LA_USER_FALLBACK) => Input::TouchFallback,
-        Some(LA_USER_CANCEL) => Input::TouchCancelled,
-        Some(_) => Input::TouchFailed,
+        Err(_) => Input::TouchUnavailable,
+        Ok(code) if TOUCH_UNUSABLE.contains(&code) => Input::TouchUnavailable,
+        Ok(0) => Input::TouchSucceeded,
+        Ok(LA_USER_FALLBACK) => Input::TouchFallback,
+        Ok(LA_USER_CANCEL) => Input::TouchCancelled,
+        Ok(_) => Input::TouchFailed,
+    }
+}
+
+/// The tty line when Touch ID could not be used: the LAError code (from `canEvaluatePolicy` or
+/// the dialog) and whether the process runs in PAM_USER's graphical session, for diagnosis.
+fn touch_unavailable_message(
+    answer: Result<libc::c_long, Option<libc::c_long>>,
+    gui_session: c_int,
+    japanese: bool,
+) -> String {
+    let code = match answer {
+        Ok(code) | Err(Some(code)) => code.to_string(),
+        Err(None) => "-".into(),
+    };
+    let session = match (gui_session, japanese) {
+        (1, false) => "yes",
+        (0, false) => "no",
+        (1, true) => "あり",
+        (0, true) => "なし",
+        (_, false) => "unknown",
+        (_, true) => "不明",
+    };
+    if japanese {
+        format!("pam-passkey: Touch ID を使えません (LAError {code}、GUI セッション: {session})")
+    } else {
+        format!("pam-passkey: Touch ID is not available (LAError {code}; GUI session: {session})")
     }
 }
 
@@ -281,6 +314,8 @@ struct Driver {
     plan: Option<Option<uid_t>>,
     /// The dialog's buttons and the tty message in Japanese (PAM_USER prefers it) or English.
     japanese: bool,
+    /// `passkey_gui_session_of(PAM_USER)` (1 / 0 / -1), only for the diagnosis line.
+    gui_session: c_int,
     reason: CString,
     id: String,
     deadline: Instant,
@@ -348,7 +383,17 @@ impl Driver {
             }
             Event::Touch(TouchReport::Ended { answer, restored }) => {
                 self.round_live = false;
-                Some(touch_input(answer, restored))
+                let input = touch_input(answer, restored);
+                if input == Input::TouchUnavailable
+                    && let Some(conv) = self.conv
+                {
+                    // SAFETY: the conversation belongs to the ongoing pam_sm_authenticate call.
+                    inform(
+                        unsafe { &*conv },
+                        &touch_unavailable_message(answer, self.gui_session, self.japanese),
+                    );
+                }
+                Some(input)
             }
             Event::Helper(helper::Report::Event(HelperEvent::Url { url })) => {
                 if let Some(conv) = self.conv {
@@ -502,6 +547,8 @@ unsafe fn authenticate(
         helper,
         plan,
         japanese,
+        // SAFETY: the session shim only reads the caller's own security and audit session.
+        gui_session: unsafe { passkey_gui_session_of(pam_uid) },
         reason,
         id,
         deadline,
@@ -622,15 +669,39 @@ mod tests {
         );
     }
 
+    // The diagnosis line names the code from either step and the session check, in the user's
+    // language.
+    #[test]
+    fn unavailable_line_carries_the_code() {
+        assert_eq!(
+            touch_unavailable_message(Ok(-4), 0, false),
+            "pam-passkey: Touch ID is not available (LAError -4; GUI session: no)"
+        );
+        assert_eq!(
+            touch_unavailable_message(Err(Some(-6)), 1, true),
+            "pam-passkey: Touch ID を使えません (LAError -6、GUI セッション: あり)"
+        );
+        assert!(touch_unavailable_message(Err(None), -1, false).contains("LAError -;"));
+    }
+
     // LAError codes map onto the state table inputs; an unrestored euid overrides any answer.
     #[test]
     fn touch_answers_map_to_inputs() {
-        assert_eq!(touch_input(Some(0), true), Input::TouchSucceeded);
-        assert_eq!(touch_input(Some(-3), true), Input::TouchFallback);
-        assert_eq!(touch_input(Some(-2), true), Input::TouchCancelled);
-        assert_eq!(touch_input(Some(-1), true), Input::TouchFailed);
-        assert_eq!(touch_input(Some(-8), true), Input::TouchFailed);
-        assert_eq!(touch_input(None, true), Input::TouchUnavailable);
-        assert_eq!(touch_input(Some(0), false), Input::EuidNotRestored);
+        assert_eq!(touch_input(Ok(0), true), Input::TouchSucceeded);
+        assert_eq!(touch_input(Ok(-3), true), Input::TouchFallback);
+        assert_eq!(touch_input(Ok(-2), true), Input::TouchCancelled);
+        assert_eq!(touch_input(Ok(-1), true), Input::TouchFailed);
+        assert_eq!(touch_input(Ok(-8), true), Input::TouchFailed);
+        assert_eq!(touch_input(Err(None), true), Input::TouchUnavailable);
+        assert_eq!(touch_input(Err(Some(-6)), true), Input::TouchUnavailable);
+        // A dialog the system could not show or keep up is "not available", not a failure.
+        for code in [-4, -5, -6, -7, -1004] {
+            assert_eq!(
+                touch_input(Ok(code), true),
+                Input::TouchUnavailable,
+                "{code}"
+            );
+        }
+        assert_eq!(touch_input(Ok(0), false), Input::EuidNotRestored);
     }
 }

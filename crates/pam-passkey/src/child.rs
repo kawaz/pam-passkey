@@ -104,6 +104,12 @@ pub fn identity(user: &str) -> Result<Identity, Box<dyn Error>> {
     }
 }
 
+impl Identity {
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+}
+
 fn shell_env_allowed(key: &OsStr) -> bool {
     let Some(key) = key.to_str() else {
         return false;

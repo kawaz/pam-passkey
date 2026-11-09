@@ -42,8 +42,13 @@ Commands (internal, started by pam_passkey.so, the helper itself or setup):
 
 Commands (verification):
   _probe-open <user>                 Open a dummy approval URL as <user>, then activate the browser again
-  _probe-dialog <reason>             Show the module's Touch ID dialog with <reason> verbatim (as the
-                                     current user, not root; e.g. $'line 1\\nline 2') and print the answer
+  _probe-dialog [--seteuid <user> | --drop <user>] <reason>
+                                     Show the module's Touch ID dialog with <reason> verbatim (e.g.
+                                     $'line 1\\nline 2') and print the ids, the GUI session check,
+                                     canEvaluatePolicy and the answer. Without a flag: as the current
+                                     user, not root. Through sudo: --seteuid evaluates as root with
+                                     the euid set to <user>, --drop in a child permanently dropped
+                                     to <user>
   _probe-system <write|read|delete> <page_url|store|send_command|signing_key|verification_key>
                                      Inspect isolated, fixed-value System Keychain items
   _probe-login <write|read|delete>   Inspect an isolated, fixed-value login keychain item
@@ -66,46 +71,119 @@ unsafe extern "C" {
     fn passkey_touch_id_release(handle: *mut std::ffi::c_void);
 }
 
+unsafe extern "C" {
+    // The module's session check (pam_passkey/src/process.c), linked here for the probe.
+    fn passkey_gui_session_of(uid: libc::uid_t) -> std::ffi::c_int;
+}
+
+/// How `_probe-dialog` evaluates, for comparing the ways the module could show its dialog.
+enum DialogAs {
+    /// As the user running the probe, without sudo (as `add` does).
+    Caller,
+    /// As root with the euid set to the user for the evaluation and back (the module inside
+    /// sudo does this, though its real uid is the user's rather than root's).
+    Seteuid(child::Identity),
+    /// In a child permanently dropped to the user, as the helper's children run.
+    Dropped(String),
+}
+
 /// `_probe-dialog`: the module's dialog with an unmodified reason, to see how the dialog
-/// renders it (line breaks, length). Prints the LAError code of the answer.
-fn probe_dialog(reason: &str) -> Result<(), Box<dyn Error>> {
+/// renders it and whether it can be shown at all. Prints the process's ids, whether it is in
+/// the user's graphical session, `canEvaluatePolicy` and the LAError code of the answer.
+fn probe_dialog(how: DialogAs, reason: &str) -> Result<(), Box<dyn Error>> {
     // SAFETY: geteuid has no preconditions.
-    if unsafe { libc::geteuid() } == 0 {
-        return Err("run as the user whose Touch ID is evaluated, without sudo".into());
-    }
+    let root = unsafe { libc::geteuid() } == 0;
+    let uid = match &how {
+        DialogAs::Caller if root => {
+            return Err("run as the user whose Touch ID is evaluated, without sudo (or use --seteuid / --drop <user> through sudo)".into());
+        }
+        DialogAs::Seteuid(_) | DialogAs::Dropped(_) if !root => {
+            return Err("--seteuid and --drop need root (run through sudo)".into());
+        }
+        DialogAs::Dropped(user) => {
+            let status = RunAs::for_user(user)?
+                .command("_probe-dialog")?
+                .arg(reason)
+                .status()?;
+            if !status.success() {
+                return Err(format!("the dropped child ended with {status}").into());
+            }
+            return Ok(());
+        }
+        DialogAs::Seteuid(identity) => identity.uid,
+        // SAFETY: getuid has no preconditions.
+        DialogAs::Caller => unsafe { libc::getuid() },
+    };
+    let japanese = match &how {
+        DialogAs::Seteuid(identity) => language::prefers_japanese(identity.home()),
+        _ => language::prefers_japanese(&current_user()?.1),
+    };
     let reason = CString::new(reason)?;
-    let japanese = language::prefers_japanese(&current_user()?.1);
-    // SAFETY: the handle is created, used and released here; the reason outlives begin.
-    unsafe {
+    if let DialogAs::Seteuid(_) = how
+        // SAFETY: seteuid has no memory preconditions.
+        && unsafe { libc::seteuid(uid) } != 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: the ids are read, the session shim reads the process's own session; the handle
+    // is created, used and released here and the reason outlives begin.
+    let (can, answer, ids, session) = unsafe {
+        let ids = (libc::getuid(), libc::geteuid());
+        let session = passkey_gui_session_of(uid);
         let handle = passkey_touch_id_create(std::ffi::c_int::from(japanese));
         if handle.is_null() {
-            return Err("could not create an LAContext".into());
-        }
-        let can = passkey_touch_id_can_evaluate(handle);
-        println!("canEvaluatePolicy: {can}");
-        let answer = if can != 0 {
-            None
-        } else if passkey_touch_id_begin(handle, reason.as_ptr()) != 0 {
-            passkey_touch_id_release(handle);
-            return Err("the reason was rejected (empty or not UTF-8)".into());
+            (None, None, ids, session)
         } else {
-            Some(passkey_touch_id_wait(handle))
-        };
-        passkey_touch_id_release(handle);
-        if let Some(answer) = answer {
-            let meaning = match answer {
-                0 => "success",
-                -1 => "authentication failed",
-                -2 => "cancel",
-                -3 => "fallback (Show details)",
-                -4 => "system cancel",
-                -8 => "biometry lockout",
-                _ => "other LAError",
-            };
-            println!("answer: {answer} ({meaning})");
+            let can = passkey_touch_id_can_evaluate(handle);
+            let answer = (can == 0 && passkey_touch_id_begin(handle, reason.as_ptr()) == 0)
+                .then(|| passkey_touch_id_wait(handle));
+            passkey_touch_id_release(handle);
+            (Some(can), answer, ids, session)
         }
+    };
+    // SAFETY: seteuid has no memory preconditions; the saved uid is root's.
+    if let DialogAs::Seteuid(_) = how
+        && unsafe { libc::seteuid(0) } != 0
+    {
+        return Err("could not return the euid to root".into());
+    }
+    println!(
+        "ruid: {} euid: {} gui-session-of({uid}): {session}",
+        ids.0, ids.1
+    );
+    match can {
+        None => println!("canEvaluatePolicy: (no LAContext)"),
+        Some(can) => println!("canEvaluatePolicy: {can}"),
+    }
+    if let Some(answer) = answer {
+        let meaning = match answer {
+            0 => "success",
+            -1 => "authentication failed",
+            -2 => "cancel",
+            -3 => "fallback (Show details)",
+            -4 => "system cancel",
+            -6 => "biometry not available",
+            -7 => "biometry not enrolled",
+            -8 => "biometry lockout",
+            -1004 => "not interactive",
+            _ => "other LAError",
+        };
+        println!("answer: {answer} ({meaning})");
     }
     Ok(())
+}
+
+fn probe_dialog_args(args: &[String]) -> Result<(), Box<dyn Error>> {
+    match args {
+        [reason] => probe_dialog(DialogAs::Caller, reason),
+        [flag, user, reason] if flag == "--seteuid" => {
+            probe_dialog(DialogAs::Seteuid(child::identity(user)?), reason)
+        }
+        [flag, user, reason] if flag == "--drop" => {
+            probe_dialog(DialogAs::Dropped(user.clone()), reason)
+        }
+        _ => Err("usage: _probe-dialog [--seteuid <user> | --drop <user>] <reason>".into()),
+    }
 }
 
 /// `_read-user`: started by the root helper as the user whose login keychain it reads; prints
@@ -244,7 +322,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         [command] if command == "_open-page" => browser(false)?,
         [command] if command == "_activate-browser" => browser(true)?,
         [command, user] if command == "_probe-open" => probe_open(user)?,
-        [command, reason] if command == "_probe-dialog" => probe_dialog(reason)?,
+        [command, rest @ ..] if command == "_probe-dialog" => probe_dialog_args(rest)?,
         [command, operation, item] if command == "_probe-system" => probe_system(operation, item)?,
         [command, operation] if command == "_probe-login" => probe_login(operation)?,
         _ => return Err("invalid arguments; run pam-passkey --help".into()),

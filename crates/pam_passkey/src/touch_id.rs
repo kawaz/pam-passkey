@@ -52,10 +52,11 @@ impl Drop for Dialog {
 pub enum Report {
     /// The dialog is up (evaluatePolicy was called).
     Started,
-    /// The round is over. `answer` is `None` when Touch ID could not be used at all;
+    /// The round is over. `answer` is the dialog's LAError code (0 for a match), or `Err` when
+    /// no dialog could be shown, with `canEvaluatePolicy`'s LAError code if it gave one;
     /// `restored` is false when the euid could not be returned to root.
     Ended {
-        answer: Option<c_long>,
+        answer: Result<c_long, Option<c_long>>,
         restored: bool,
     },
 }
@@ -120,7 +121,7 @@ impl Round {
                 // SAFETY: seteuid has no memory preconditions.
                 if unsafe { libc::seteuid(uid) } != 0 {
                     report(Report::Ended {
-                        answer: None,
+                        answer: Err(None),
                         restored: unsafe { libc::geteuid() } == 0,
                     });
                     return;
@@ -162,26 +163,27 @@ fn evaluate(
     japanese: bool,
     reason: &CString,
     report: &impl Fn(Report),
-) -> Option<c_long> {
-    let dialog = Arc::new(Dialog::create(japanese)?);
+) -> Result<c_long, Option<c_long>> {
+    let dialog = Arc::new(Dialog::create(japanese).ok_or(None)?);
     // SAFETY: the handle is alive for the whole function.
-    if unsafe { passkey_touch_id_can_evaluate(dialog.0) } != 0 {
-        return None;
+    let can = unsafe { passkey_touch_id_can_evaluate(dialog.0) };
+    if can != 0 {
+        return Err(Some(can));
     }
     {
         let mut state = lock(&shared.state);
         if state.cancelled {
-            return Some(LA_APP_CANCEL);
+            return Ok(LA_APP_CANCEL);
         }
         // SAFETY: the reason is NUL-terminated and outlives the call; the shim copies it.
         if unsafe { passkey_touch_id_begin(dialog.0, reason.as_ptr()) } != 0 {
-            return None;
+            return Err(None);
         }
         state.dialog = Some(Arc::clone(&dialog));
     }
     report(Report::Started);
     // SAFETY: the evaluation was started above, so the semaphore is signalled exactly once.
-    Some(unsafe { passkey_touch_id_wait(dialog.0) })
+    Ok(unsafe { passkey_touch_id_wait(dialog.0) })
 }
 
 /// Whether the dialog's buttons are shown in Japanese: the first of the preferred languages of

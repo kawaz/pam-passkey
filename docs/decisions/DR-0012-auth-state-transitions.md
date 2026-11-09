@@ -30,7 +30,7 @@
 - remote が使えないとは、helper の起動失敗 (`pam-passkey` バイナリが無い / 置き場の検査に通らない / spawn の失敗 / spawn した helper の署名の検査に通らない)、または helper が `unavailable` イベント (`PAM_USER` の登録が 0 件、ストアに届かない、`PAM_USER` の login keychain が unlock されていない) を返した場合を指す ([helper-protocol](../design/helper-protocol.md))。それ以外で remote が通らないものは remote の失敗として扱う
 - 片方でも走れば、走った経路の結果で `PAM_SUCCESS` / `PAM_AUTH_ERR` を返す
 - どちらかが成功したらもう片方を止めて `PAM_SUCCESS`、両方失敗したら `PAM_AUTH_ERR` ([DR-0002](./DR-0002-single-module-parallel-auth.md))
-- `PAM_USER` の GUI セッションが無ければ Touch ID は出さず、remote だけで待つ。GUI セッションの有無は `SessionGetInfo` 相当で、`PAM_USER` の graphical session があるかで判定する
+- Touch ID のダイアログを出せなければ、remote だけで待つ。出せるかは事前にセッションの属性で判定せず、`canEvaluatePolicy` と `evaluatePolicy` を試して決める (LocalAuthentication は GUI ログインセッション外のプロセスからもダイアログを出せる)。`canEvaluatePolicy` が false の時と、評価が system cancel (-4)、passcode 未設定 (-5)、biometry 不可 (-6)、未登録 (-7)、not interactive (-1004) で返った時が「出せない」。その時は tty に LAError の値を 1 行出す
 - remote が走っている間に Touch ID が失敗しても (生体の不一致、lockout)、remote は止めず、Touch ID 側だけを終える
 - 「詳細を確認」の fallback ボタンは常に出す。押された時に remote が使えない (helper が `unavailable` を返した後、または `open` に helper が応えられない) なら、両方を止めて `PAM_AUTH_ERR`
 - キャンセルは両方を止めて `PAM_AUTH_ERR`
@@ -55,7 +55,7 @@
 
 | 状況 | Touch ID | remote | PAM の戻り値 |
 |---|---|---|---|
-| `PAM_USER` の GUI セッションが無い | 出さない | 走る | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>remote も使えない: `PAM_IGNORE` |
+| Touch ID のダイアログを出せない (`evaluatePolicy` が -4 / -5 / -6 / -7 / -1004 で返る) | 使えない | 走る | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>remote も使えない: `PAM_IGNORE` |
 | Touch ID を使えない (policy を評価できない (`canEvaluatePolicy` が false)、または呼び出し元の euid が 0 でなく uid が `PAM_USER` と違う) | 使えない | 走る | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR`<br>remote も使えない: `PAM_IGNORE` |
 | Touch ID ダイアログのキャンセル | 止める | 止める | `PAM_AUTH_ERR` |
 | remote の走行中に Touch ID が失敗 (生体の不一致、lockout) | 終える | 走り続ける | remote 成功: `PAM_SUCCESS`<br>remote 失敗 / 期限切れ: `PAM_AUTH_ERR` |
