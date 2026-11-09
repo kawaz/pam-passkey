@@ -1,6 +1,6 @@
 ---
 title: send_command に URL だけでなく要求の要約も渡す
-status: wip
+status: resolved
 category: task
 created: 2026-11-09T12:55:19+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered: 2026-11-09T15:43:10+09:00
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T16:02:46+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["dr/DR-0008","implemented"]
 blocked_by:
 origin: 自リポ TODO
 ---
@@ -57,9 +57,9 @@ origin: 自リポ TODO
 
 ## 受け入れ条件
 
-- [ ] DR-0008 と helper-protocol / exchange-format / MANUAL (ja・en) の該当を更新 (表は MANUAL に、取り決めは DR-0008 に)
-- [ ] 既存の「URL 1 行だけ読む」スクリプトがそのまま動く (stdin は変えない)
-- [ ] `PAM_PASSKEY_DETAILS` がストアに PUT した request の `details` とバイト一致するテスト
-- [ ] `PAM_PASSKEY_COMMAND` の引用のテスト (空白・単一引用符・空要素)
-- [ ] MANUAL の Bark / ntfy の例スクリプトが本文に `$PAM_PASSKEY_USER@$PAM_PASSKEY_HOST` と `$PAM_PASSKEY_COMMAND` を出す
-- [ ] `cargo test --workspace` (ignored を除く) が通る
+- [x] DR-0008 と helper-protocol / exchange-format / MANUAL (ja・en) の該当を更新 (表は MANUAL に、取り決めは DR-0008 に)
+- [x] 既存の「URL 1 行だけ読む」スクリプトがそのまま動く (stdin は変えない)
+- [x] `PAM_PASSKEY_DETAILS` がストアに PUT した request の `details` とバイト一致するテスト
+- [x] `PAM_PASSKEY_COMMAND` の引用のテスト (空白・単一引用符・空要素)
+- [x] MANUAL の Bark / ntfy の例スクリプトが本文に `$PAM_PASSKEY_USER@$PAM_PASSKEY_HOST` と `$PAM_PASSKEY_COMMAND` を出す (Bark・ntfy の実サーバ送信は未検証)
+- [x] `cargo test --workspace` (ignored を除く) が通る
