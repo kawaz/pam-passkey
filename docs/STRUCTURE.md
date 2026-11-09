@@ -8,7 +8,7 @@ pam-passkey/
   justfile                  # task runner (build = release ビルド + Developer ID 署名、install、lint、push のゲート)
   .gitignore                # target/ を除外
   crates/
-    protocol/                 # helper-protocol / exchange-format の型 (serde)
+    protocol/                 # helper-protocol / exchange-format の型 (serde) と、PAM モジュールと CLI が共有する処理 (置き場の検査、Touch ID ダイアログの本文)
     pam-passkey/              # CLI と helper (Keychain 層、_auth、setup / add / list / del)
     pam_passkey/              # PAM モジュール (cdylib。LAContext と helper の並走、DR-0012 の状態遷移)
   docs/

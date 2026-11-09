@@ -17,7 +17,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use touch_id::{LA_USER_CANCEL, LA_USER_FALLBACK, Report as TouchReport, Round};
+use touch_id::{
+    LA_BIOMETRY_LOCKOUT, LA_USER_CANCEL, LA_USER_FALLBACK, Report as TouchReport, Round,
+};
 
 // Values and layouts from the macOS SDK's security/pam_{appl,constants,types}.h.
 const PAM_SUCCESS: c_int = 0;
@@ -197,6 +199,27 @@ fn user_of(user: &str) -> Option<(uid_t, PathBuf)> {
     }
 }
 
+/// The user name of a uid from the user database.
+fn user_name(uid: uid_t) -> Option<String> {
+    // SAFETY: getpwuid_r writes into the provided struct and buffer only; the name is copied out.
+    unsafe {
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut storage = vec![0u8; 16384];
+        let mut result = std::ptr::null_mut();
+        let rc = libc::getpwuid_r(
+            uid,
+            &mut pwd,
+            storage.as_mut_ptr().cast(),
+            storage.len(),
+            &mut result,
+        );
+        if rc != 0 || result.is_null() || pwd.pw_name.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned())
+    }
+}
+
 fn host_name() -> String {
     let mut buffer = [0u8; 256];
     // SAFETY: gethostname writes at most the buffer length.
@@ -256,13 +279,26 @@ fn touch_input(answer: Result<libc::c_long, Option<libc::c_long>>, restored: boo
     }
 }
 
-/// The tty line when Touch ID could not be used: the LAError code (from `canEvaluatePolicy` or
-/// the dialog) and whether the process runs in PAM_USER's graphical session, for diagnosis.
+/// Touch ID could not be used because biometry is locked out (`canEvaluatePolicy` -8).
+fn locked_out(answer: Result<libc::c_long, Option<libc::c_long>>) -> bool {
+    answer == Err(Some(LA_BIOMETRY_LOCKOUT))
+}
+
+/// The tty line when Touch ID could not be used. A lockout names its cause and how to end it;
+/// otherwise the LAError code (from `canEvaluatePolicy` or the dialog) and whether the process
+/// runs in PAM_USER's graphical session, for diagnosis.
 fn touch_unavailable_message(
     answer: Result<libc::c_long, Option<libc::c_long>>,
     gui_session: c_int,
     japanese: bool,
 ) -> String {
+    if locked_out(answer) {
+        return if japanese {
+            "pam-passkey: Touch ID は失敗回数の超過でロックされています。一度パスワードで Mac のロックを解除すると、また使えます".into()
+        } else {
+            "pam-passkey: Touch ID is locked after too many failed attempts; unlock the Mac with your password once to use it again".into()
+        };
+    }
     let code = match answer {
         Ok(code) | Err(Some(code)) => code.to_string(),
         Err(None) => "-".into(),
@@ -311,6 +347,10 @@ fn helper_input(id: &str, event: helper::Report) -> Option<Input> {
         Report::WriteFailed {
             command: Some(HelperCommand::Open | HelperCommand::Reactivate),
         } => Input::OpenFailed,
+        // The notice is a courtesy; a helper that cannot take it may still answer the request.
+        Report::WriteFailed {
+            command: Some(HelperCommand::NotifyLockout),
+        } => return None,
         Report::WriteFailed { .. } => Input::RemoteFailed,
     })
 }
@@ -326,9 +366,10 @@ struct Driver {
     open_due: bool,
     helper: Option<helper::Helper>,
     plan: Option<Option<uid_t>>,
-    /// The dialog's buttons and the tty message in Japanese (PAM_USER prefers it) or English.
+    /// The dialog's buttons and the tty messages in Japanese (PAM_USER prefers it) or English.
     japanese: bool,
-    /// `passkey_gui_session_of(PAM_USER)` (1 / 0 / -1), only for the diagnosis line.
+    /// `passkey_gui_session_of(PAM_USER)` (1 / 0 / -1): the diagnosis line, and whether a lockout
+    /// is also noticed on the screen.
     gui_session: c_int,
     reason: CString,
     id: String,
@@ -411,6 +452,18 @@ impl Driver {
                         unsafe { &*conv },
                         &touch_unavailable_message(answer, self.gui_session, self.japanese),
                     );
+                }
+                // On the screen too, where the user expected the dialog (DR-0012 lockout).
+                if input == Input::TouchUnavailable
+                    && locked_out(answer)
+                    && self.gui_session == 1
+                    && let Some(helper) = &self.helper
+                {
+                    log::step(&format!(
+                        "request {}: lockout notice to the helper",
+                        self.id
+                    ));
+                    helper.send(HelperCommand::NotifyLockout);
                 }
                 Some(input)
             }
@@ -601,8 +654,13 @@ unsafe fn authenticate(
         && !conv.is_null()
         && flags & PAM_SILENT == 0)
         .then_some(conv.cast::<PamConv>());
-    let reason = CString::new(touch_id::reason(&argv_text, &service))
-        .unwrap_or_else(|_| c"pam-passkey".to_owned());
+    // Built from the chain while the euid is still the caller's (user names are looked up here).
+    let reason = CString::new(protocol::dialog::reason(
+        &input.details.processes,
+        user_name,
+        &service,
+    ))
+    .unwrap_or_else(|_| c"pam-passkey".to_owned());
     let mut driver = Driver {
         events,
         sender,
@@ -747,6 +805,37 @@ mod tests {
             "pam-passkey: Touch ID を使えません (LAError -6、GUI セッション: あり)"
         );
         assert!(touch_unavailable_message(Err(None), -1, false).contains("LAError -;"));
+    }
+
+    // A lockout says why Touch ID does not come up and how to get it back, in the user's language.
+    #[test]
+    fn lockout_line_names_the_cause_and_the_way_out() {
+        assert_eq!(
+            touch_unavailable_message(Err(Some(-8)), 1, false),
+            "pam-passkey: Touch ID is locked after too many failed attempts; unlock the Mac with your password once to use it again"
+        );
+        let japanese = touch_unavailable_message(Err(Some(-8)), 0, true);
+        assert!(japanese.starts_with("pam-passkey: Touch ID は失敗回数の超過でロック"));
+        assert!(japanese.contains("パスワード"));
+        assert!(locked_out(Err(Some(-8))));
+        // Only canEvaluatePolicy's -8 is a lockout before the dialog; the others keep the code line.
+        assert!(!locked_out(Ok(-8)));
+        assert!(!locked_out(Err(Some(-7))));
+        assert!(touch_unavailable_message(Err(Some(-7)), 1, false).contains("LAError -7"));
+    }
+
+    // The lockout notice cannot turn into a remote failure when the helper no longer reads.
+    #[test]
+    fn failed_notice_write_is_not_a_remote_failure() {
+        assert_eq!(
+            helper_input(
+                "ours",
+                helper::Report::WriteFailed {
+                    command: Some(HelperCommand::NotifyLockout)
+                }
+            ),
+            None
+        );
     }
 
     // LAError codes map onto the state table inputs; an unrestored euid overrides any answer.

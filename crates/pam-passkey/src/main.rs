@@ -17,7 +17,7 @@ use child::{RunAs, current_user};
 use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
 use std::error::Error;
 use std::ffi::{CString, c_char};
-use std::io::BufRead;
+use std::io::{BufRead, Read};
 use std::path::Path;
 
 const HELP: &str = "pam-passkey — passkey approval for PAM authentication (e.g. sudo) from a phone or this Mac
@@ -40,16 +40,19 @@ Commands (internal, started by pam_passkey.so, the helper itself or setup):
                                      passkey records from the login keychain (exit 3: locked)
   _open-page                         Open the URL read from stdin in the default browser
   _activate-browser                  Bring the default browser for the URL read from stdin to the front
+  _notify-lockout                    Post the Touch ID lockout notice to Notification Center
 
 Commands (verification):
   _probe-open <user>                 Open a dummy approval URL as <user>, then activate the browser again
-  _probe-dialog [--seteuid <user> | --drop <user>] <reason>
+  _probe-dialog [--seteuid <user> | --drop <user>] <reason|--chain>
                                      Show the module's Touch ID dialog with <reason> verbatim (e.g.
-                                     $'line 1\\nline 2') and print the ids, the GUI session check,
-                                     canEvaluatePolicy and the answer. Without a flag: as the current
-                                     user, not root. Through sudo: --seteuid evaluates as root with
-                                     the euid set to <user>, --drop in a child permanently dropped
-                                     to <user>
+                                     $'line 1\\nline 2'), or with --chain the text the module builds
+                                     from a process chain read as a JSON array on stdin (the request's
+                                     processes, caller first; the text is printed too), and print the
+                                     ids, the GUI session check, canEvaluatePolicy and the answer.
+                                     Without a flag: as the current user, not root. Through sudo:
+                                     --seteuid evaluates as root with the euid set to <user>, --drop
+                                     in a child permanently dropped to <user>
   _probe-system <write|read|delete> <page_url|store|send_command|signing_key|verification_key>
                                      Inspect isolated, fixed-value System Keychain items
   _probe-login <write|read|delete>   Inspect an isolated, fixed-value login keychain item
@@ -174,17 +177,63 @@ fn probe_dialog(how: DialogAs, reason: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// `--chain`: the module's dialog text for the process chain on standard input.
+fn chain_reason() -> Result<String, Box<dyn Error>> {
+    let mut json = String::new();
+    std::io::stdin().read_to_string(&mut json)?;
+    let processes: Vec<protocol::ProcessDetails> = serde_json::from_str(&json)?;
+    let reason = protocol::dialog::reason(&processes, child::user_name, "sudo");
+    println!("reason:{reason}\n");
+    Ok(reason)
+}
+
 fn probe_dialog_args(args: &[String]) -> Result<(), Box<dyn Error>> {
-    match args {
-        [reason] => probe_dialog(DialogAs::Caller, reason),
-        [flag, user, reason] if flag == "--seteuid" => {
-            probe_dialog(DialogAs::Seteuid(child::identity(user)?), reason)
+    const USAGE: &str = "usage: _probe-dialog [--seteuid <user> | --drop <user>] <reason|--chain>";
+    let (how, reason) = match args {
+        [reason] => (None, reason),
+        [flag, user, reason] if flag == "--seteuid" || flag == "--drop" => {
+            (Some((flag.as_str(), user)), reason)
         }
-        [flag, user, reason] if flag == "--drop" => {
-            probe_dialog(DialogAs::Dropped(user.clone()), reason)
+        _ => return Err(USAGE.into()),
+    };
+    let reason = if reason == "--chain" {
+        chain_reason()?
+    } else {
+        reason.clone()
+    };
+    match how {
+        None => probe_dialog(DialogAs::Caller, &reason),
+        Some(("--seteuid", user)) => {
+            probe_dialog(DialogAs::Seteuid(child::identity(user)?), &reason)
         }
-        _ => Err("usage: _probe-dialog [--seteuid <user> | --drop <user>] <reason>".into()),
+        Some((_, user)) => probe_dialog(DialogAs::Dropped(user.clone()), &reason),
     }
+}
+
+/// `_notify-lockout`: started by the helper as PAM_USER when Touch ID is locked out (DR-0012);
+/// posts a notification, which is not modal and stays in Notification Center.
+fn notify_lockout() -> Result<(), Box<dyn Error>> {
+    use std::os::unix::process::CommandExt;
+    let message = if language::prefers_japanese(&current_user()?.1) {
+        "Touch ID は失敗回数の超過でロックされています。一度パスワードで Mac のロックを解除すると、また使えます。"
+    } else {
+        "Touch ID is locked after too many failed attempts. Unlock the Mac with your password once to use it again."
+    };
+    // The text goes in as arguments of the script, never into its source.
+    let error = std::process::Command::new("/usr/bin/osascript")
+        .env_clear()
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "display notification (item 2 of argv) with title (item 1 of argv)",
+            "-e",
+            "end run",
+            "pam-passkey",
+            message,
+        ])
+        .exec();
+    Err(format!("/usr/bin/osascript: {error}").into())
 }
 
 /// `_read-user`: started by the root helper as the user whose login keychain it reads; prints
@@ -322,6 +371,7 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         [command] if command == "_setup-write" => setup::write_from_stdin()?,
         [command] if command == "_open-page" => browser(false)?,
         [command] if command == "_activate-browser" => browser(true)?,
+        [command] if command == "_notify-lockout" => notify_lockout()?,
         [command, user] if command == "_probe-open" => probe_open(user)?,
         [command, rest @ ..] if command == "_probe-dialog" => probe_dialog_args(rest)?,
         [command, operation, item] if command == "_probe-system" => probe_system(operation, item)?,

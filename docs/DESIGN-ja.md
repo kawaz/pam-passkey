@@ -73,7 +73,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 - 呼び出し元が setuid プロセス (sudo 等) の場合、AppKit を PAM モジュール内で初期化できない (初期化時にプロセスごと exit する)。ブラウザで承認ページを開いて前面に出す処理は helper 側で行う ([findings](./findings/2026-11-02-pam-poc.md))
 - `LAContext` は euid の生体登録状態を見るので、評価の間だけ `PAM_USER` の uid に `seteuid` で落とし、終わったら `seteuid(0)` で戻す。`seteuid` はプロセス全体に効くので、プロセス情報の収集と helper の spawn を済ませてから落とす。戻せなければ `PAM_AUTH_ERR` ([DR-0012](./decisions/DR-0012-auth-state-transitions.md))
 - policy は `LAPolicyDeviceOwnerAuthenticationWithBiometricsOrCompanion` (Apple Watch での承認も通る)。fallback ボタンは `localizedFallbackTitle` で「詳細を確認」に差し替え (ボタンの文言は英語既定の `Show details` / `Cancel`。`PAM_USER` の第一言語が日本語なら「詳細を確認」/「キャンセル」)、押下は `LAErrorUserFallback` (-3) で拾う
-- ダイアログ本文は `localizedReason` の長さ制限に合わせ、末尾でなく中央を省略する (先頭と末尾を残す)
+- ダイアログ本文 (`localizedReason`) は呼び出し元の cwd と、launchd から呼び出し元までの祖先チェーンを縦に出す。行数と行長に上限を置き、制御文字と bidi 制御文字はエスケープする ([DR-0004](./decisions/DR-0004-fallback-button-as-details.md))
 - モジュールはプロセスを落とさない。モジュールの不具合で sudo が通らず setup もできなくなる事態 (ハシゴ外し) の歯止めは、失敗が後続のパスワード認証に流れること
 - 使う passkey と Touch ID の生体は `PAM_USER` のもの。`users/<PAM_USER>` の項目を読み、`LAContext` は `PAM_USER` の uid で評価し、`send_command` / 承認ページを開く子も `PAM_USER` に降格する。`PAM_USER` が root (sudoers の `targetpw` 等) なら passkey も生体も無く、パスワードへ落ちる ([DR-0012](./decisions/DR-0012-auth-state-transitions.md))
 
@@ -93,7 +93,7 @@ sudo ─ pam_passkey.so ──┬─ スレッド A: LAContext (Touch ID ダイ�
 
 ### helper の権限
 
-helper は root で起動するが (呼び出し元の euid が 0 でなければ降格せず、呼び出し元と同じ uid で動く)、ストアとの通信、assertion の検証、result の PUT は helper 自身が行う。`PAM_USER` の権限が要る処理 (login keychain の読み出し、`send_command`、承認ページを開く) だけを `PAM_USER` に永久降格した子で行う。spawn の手順 (絶対パス、空の環境から許可リスト、0/1/2 以外の fd を閉じる、cwd / umask の固定) と降格の順序は [DR-0003](./decisions/DR-0003-helper-outside-sudo.md)、PAM と helper の間の取り決め (標準入力の JSON、標準出力のイベント) は [helper-protocol](./design/helper-protocol.md)。
+helper は root で起動するが (呼び出し元の euid が 0 でなければ降格せず、呼び出し元と同じ uid で動く)、ストアとの通信、assertion の検証、result の PUT は helper 自身が行う。`PAM_USER` の権限が要る処理 (login keychain の読み出し、`send_command`、承認ページを開く、Touch ID の lockout の通知) だけを `PAM_USER` に永久降格した子で行う。spawn の手順 (絶対パス、空の環境から許可リスト、0/1/2 以外の fd を閉じる、cwd / umask の固定) と降格の順序は [DR-0003](./decisions/DR-0003-helper-outside-sudo.md)、PAM と helper の間の取り決め (標準入力の JSON、標準出力のイベント) は [helper-protocol](./design/helper-protocol.md)。
 
 ## 承認 URL と交換の流れ
 

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+pub mod dialog;
 pub mod encoding;
 pub mod placement;
 
@@ -65,7 +66,11 @@ pub enum UnavailableReason {
 pub enum HelperCommand {
     Open,
     Reactivate,
-    Finish { pass: bool },
+    /// Touch ID is locked out (`canEvaluatePolicy` -8) while PAM_USER has a GUI session.
+    NotifyLockout,
+    Finish {
+        pass: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +166,7 @@ mod tests {
         for (command, wire) in [
             (HelperCommand::Open, r#"{"cmd":"open"}"#),
             (HelperCommand::Reactivate, r#"{"cmd":"reactivate"}"#),
+            (HelperCommand::NotifyLockout, r#"{"cmd":"notify_lockout"}"#),
             (
                 HelperCommand::Finish { pass: true },
                 r#"{"cmd":"finish","pass":true}"#,

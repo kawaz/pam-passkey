@@ -17,7 +17,7 @@ remote 承認には、要求のストアへの PUT、通知コマンドの起動
 
 - helper は `pam-passkey` バイナリの内部サブコマンドとして実装し、PAM モジュールはこれを spawn する薄い層にする。ロジックは CLI 側に置く。PAM と helper の間の取り決め (渡すもの、返すもの、fd の役割) は [helper-protocol](../design/helper-protocol.md)
 - helper は root で起動し、ストアとの通信、assertion の検証、result の PUT を自分で行う
-- `PAM_USER` の権限が要る処理 (login keychain の読み出し、`send_command`、承認ページを開く) だけを、`PAM_USER` に永久降格した子で行う (`setgroups` / `setgid` / `setuid`)
+- `PAM_USER` の権限が要る処理 (login keychain の読み出し、`send_command`、承認ページを開く、Touch ID の lockout の通知) だけを、`PAM_USER` に永久降格した子で行う (`setgroups` / `setgid` / `setuid`)
 - 子の永久降格は、`PAM_USER` の補助グループで `setgroups`、続けて `setgid`、`setuid` の順に行う。real / effective / saved の uid がすべて `PAM_USER` になり、子は root に戻れない
 - PAM が起動する `pam-passkey` バイナリの絶対パスは、pam.d のモジュール引数 `helper=<path>` で指定する。省略時はビルド時に埋め込んだ既定のパスを使う
 - spawn の手順 (PAM が helper を起動する時と、helper が子を起動する時の両方):

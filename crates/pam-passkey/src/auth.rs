@@ -238,6 +238,20 @@ pub fn activate_browser(run_as: &RunAs, url: &str) -> Result<(), Box<dyn Error>>
     browser(run_as, "_activate-browser", url)
 }
 
+/// Runs `pam-passkey _notify-lockout` as PAM_USER: the screen notice of a Touch ID lockout.
+pub fn notify_lockout(run_as: &RunAs) -> Result<(), Box<dyn Error>> {
+    let status = run_as
+        .command("_notify-lockout")?
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .status()?;
+    if !status.success() {
+        return Err(format!("_notify-lockout failed: {status}").into());
+    }
+    Ok(())
+}
+
 /// Serves PAM's commands until `finish`, the close of standard input, the deadline, or a poll
 /// that concludes the request. `lines` yields each later input line, then `None` at end of
 /// input; `poll` runs every `interval` (first right away) and is given the time left.
@@ -281,6 +295,26 @@ pub trait Effects {
     fn send(&mut self, command: &str, url: &str);
     fn open(&mut self, url: &str);
     fn reactivate(&mut self, url: &str);
+    fn notify_lockout(&mut self);
+}
+
+/// Serves what PAM may still send after `unavailable` until it closes the input (or `finish`, or
+/// the deadline): only the lockout notice applies, as there is no request to open.
+fn serve_after_unavailable(
+    lines: &Receiver<Option<Vec<u8>>>,
+    deadline: Instant,
+    effects: &mut impl Effects,
+) -> Ending {
+    serve(
+        lines,
+        deadline,
+        POLL_INTERVAL,
+        |command| match command {
+            HelperCommand::NotifyLockout => effects.notify_lockout(),
+            HelperCommand::Open | HelperCommand::Reactivate | HelperCommand::Finish { .. } => {}
+        },
+        |_| None,
+    )
 }
 
 /// One request against the store, after PAM_USER's credentials have been established.
@@ -370,6 +404,7 @@ impl Remote<'_> {
             match command {
                 HelperCommand::Open => effects.open(&approval_url),
                 HelperCommand::Reactivate => effects.reactivate(&approval_url),
+                HelperCommand::NotifyLockout => effects.notify_lockout(),
                 HelperCommand::Finish { .. } => {}
             }
         };
@@ -505,6 +540,13 @@ impl Effects for Helper<'_> {
             warn(&format!("{error}"));
         }
     }
+
+    fn notify_lockout(&mut self) {
+        match notify_lockout(self.run_as) {
+            Ok(()) => log::step("lockout notice posted"),
+            Err(error) => warn(&format!("{error}")),
+        }
+    }
 }
 
 impl Drop for Helper<'_> {
@@ -603,11 +645,32 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let deadline = Instant::now() + Duration::from_secs(remaining);
 
     let id = input.id.clone();
-    let unavailable = |reason| {
-        warn(&format!("request {id}: unavailable {reason:?}"));
-        emit(&HelperEvent::Unavailable { reason })
-    };
+    // Commands are read from the start: the lockout notice may come while remote is still being
+    // set up, or after it turned out to be unavailable.
+    let (sender, lines) = channel();
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin().lock();
+        while let Ok(Some(line)) = read_line(&mut stdin) {
+            if sender.send(Some(line)).is_err() {
+                return;
+            }
+        }
+        let _ = sender.send(None);
+    });
     let run_as = RunAs::for_user(&input.user)?;
+    let mut effects = Helper {
+        run_as: &run_as,
+        sent: None,
+    };
+    let unavailable = |reason, effects: &mut Helper| -> Result<(), Box<dyn Error>> {
+        warn(&format!("request {id}: unavailable {reason:?}"));
+        emit(&HelperEvent::Unavailable { reason })?;
+        let ending = serve_after_unavailable(&lines, deadline, effects);
+        log::step(&format!(
+            "request {id}: ended after unavailable: {ending:?}"
+        ));
+        Ok(())
+    };
     log::step(&format!(
         "request {id}: helper for user {} ({})",
         input.user,
@@ -633,7 +696,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             ));
             items
         }
-        UserRead::Locked => return Ok(unavailable(UnavailableReason::KeychainLocked)?),
+        UserRead::Locked => return unavailable(UnavailableReason::KeychainLocked, &mut effects),
     };
     let UserSettings {
         page,
@@ -642,19 +705,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         credentials,
     } = match user_settings(items, &input.user, verification_key()?.as_ref()) {
         Ok(settings) => settings,
-        Err(reason) => return Ok(unavailable(reason)?),
+        Err(reason) => return unavailable(reason, &mut effects),
     };
 
-    let (sender, lines) = channel();
-    std::thread::spawn(move || {
-        let mut stdin = std::io::stdin().lock();
-        while let Ok(Some(line)) = read_line(&mut stdin) {
-            if sender.send(Some(line)).is_err() {
-                return;
-            }
-        }
-        let _ = sender.send(None);
-    });
     let remote = Remote {
         input: &input,
         page: &page,
@@ -664,14 +717,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         expires,
         deadline,
     };
-    let mut effects = Helper {
-        run_as: &run_as,
-        sent: None,
-    };
-    if let Err(reason) = remote.run(&lines, &mut effects) {
-        unavailable(reason)?;
+    match remote.run(&lines, &mut effects) {
+        Ok(_) => Ok(()),
+        Err(reason) => unavailable(reason, &mut effects),
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -829,6 +878,7 @@ mod tests {
         events: Vec<HelperEvent>,
         sent: Vec<(String, String)>,
         opened: Vec<String>,
+        notices: usize,
     }
 
     /// Effects that hand the approval URL to a test "page" through a channel.
@@ -854,6 +904,44 @@ mod tests {
             self.recorded.opened.push(url.to_owned());
         }
         fn reactivate(&mut self, _: &str) {}
+        fn notify_lockout(&mut self) {
+            self.recorded.notices += 1;
+        }
+    }
+
+    // After `unavailable` the helper stays for the lockout notice only, and leaves when PAM closes
+    // its input; open / reactivate have no request to act on.
+    #[test]
+    fn after_unavailable_only_the_lockout_notice_is_served() {
+        let lines = feed(&[
+            Some(r#"{"cmd":"open"}"#),
+            Some(r#"{"cmd":"notify_lockout"}"#),
+            Some(r#"{"cmd":"reactivate"}"#),
+            None,
+        ]);
+        let (urls, _) = channel();
+        let mut recorder = Recorder {
+            recorded: Recorded::default(),
+            urls,
+        };
+        let ending = serve_after_unavailable(
+            &lines,
+            Instant::now() + Duration::from_secs(5),
+            &mut recorder,
+        );
+        assert_eq!(ending, Ending::Cancelled);
+        assert_eq!(recorder.recorded.notices, 1);
+        assert!(recorder.recorded.opened.is_empty());
+        // `finish` (Touch ID succeeded) ends it as well.
+        let lines = feed(&[Some(r#"{"cmd":"finish","pass":true}"#)]);
+        assert_eq!(
+            serve_after_unavailable(
+                &lines,
+                Instant::now() + Duration::from_secs(5),
+                &mut recorder
+            ),
+            Ending::Finished { pass: true }
+        );
     }
 
     fn input(id: &str, lifetime: i64) -> HelperInput {

@@ -46,8 +46,11 @@ PAM は、起動時に渡した要求 ID を持つ `result` の `pass: true` 以
 |---|---|
 | `{"cmd":"open"}` | 「詳細を確認」が押された (PAM はダイアログを出し直してから送る)。helper は `PAM_USER` に降格した子で承認ページを開いてブラウザを activate し、PAM からの `reactivate` に応えてもう一度 activate する ([DR-0004](../decisions/DR-0004-fallback-button-as-details.md)) |
 | `{"cmd":"reactivate"}` | `open` の後に常に送る (ダイアログの表示がブラウザより遅れた場合の保険)。helper は降格した子でブラウザをもう一度 activate する ([DR-0009](../decisions/DR-0009-foreground-control.md)) |
+| `{"cmd":"notify_lockout"}` | Touch ID が lockout (`canEvaluatePolicy` が -8) で、`PAM_USER` の GUI セッションがある。helper は `PAM_USER` に降格した子で通知を出す ([DR-0012](../decisions/DR-0012-auth-state-transitions.md))。書き込めなくても PAM は remote の失敗とは見なさない |
 | `{"cmd":"finish","pass":true}` | Touch ID が成功した。PAM は送った後、helper の終了を待たずに `PAM_SUCCESS` を返す。helper は result に `pass` を PUT し、request と assertion を DELETE して自分で終了する |
 | 標準入力の close | キャンセル。helper は result に `fail` を PUT して終了する |
+
+helper はコマンドを起動直後から受け取り、assertion の待ちに入ってから順に応える。`unavailable` を送った時は、その後も標準入力の close (または `finish`、期限) まで残り、`notify_lockout` だけに応える。
 
 helper から応答が無ければ、PAM は期限 (`expires`) の後に終了シグナルを送る。
 

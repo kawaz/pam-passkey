@@ -1,5 +1,6 @@
-//! The language of the system dialogs this binary shows (Touch ID / password): English, or
-//! Japanese for a user whose first preferred language is Japanese. CLI messages stay English.
+//! The language of the system dialogs (Touch ID / password) and notifications this binary shows:
+//! English, or Japanese for a user whose first preferred language is Japanese. CLI messages stay
+//! English.
 
 use std::ffi::{CString, c_char, c_int};
 use std::os::unix::ffi::OsStrExt;

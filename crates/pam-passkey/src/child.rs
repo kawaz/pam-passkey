@@ -53,6 +53,27 @@ pub fn current_user() -> Result<(String, PathBuf), Box<dyn Error>> {
     }
 }
 
+/// The user name of a uid from the user database.
+pub fn user_name(uid: libc::uid_t) -> Option<String> {
+    // SAFETY: getpwuid_r writes to the provided struct/buffer; the name is copied before it is dropped.
+    unsafe {
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut storage = vec![0u8; 16384];
+        let mut result = std::ptr::null_mut();
+        let rc = libc::getpwuid_r(
+            uid,
+            &mut pwd,
+            storage.as_mut_ptr().cast(),
+            storage.len(),
+            &mut result,
+        );
+        if rc != 0 || result.is_null() || pwd.pw_name.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned())
+    }
+}
+
 pub fn identity(user: &str) -> Result<Identity, Box<dyn Error>> {
     let name = CString::new(user)?;
     // Resolve all identities and supplemental groups in the parent, before fork.

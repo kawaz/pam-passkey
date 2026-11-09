@@ -31,6 +31,7 @@
 - 片方でも走れば、走った経路の結果で `PAM_SUCCESS` / `PAM_AUTH_ERR` を返す
 - どちらかが成功したらもう片方を止めて `PAM_SUCCESS`、両方失敗したら `PAM_AUTH_ERR` ([DR-0002](./DR-0002-single-module-parallel-auth.md))
 - Touch ID のダイアログを出せなければ、remote だけで待つ。出せるかは事前にセッションの属性で判定せず、`canEvaluatePolicy` と `evaluatePolicy` を試して決める (LocalAuthentication は GUI ログインセッション外のプロセスからもダイアログを出せる)。`canEvaluatePolicy` が false の時と、評価が system cancel (-4)、passcode 未設定 (-5)、biometry 不可 (-6)、未登録 (-7)、not interactive (-1004) で返った時が「出せない」。その時は tty に LAError の値を 1 行出す
+- `canEvaluatePolicy` が lockout (-8、失敗回数の超過) の時も「出せない」として remote だけで待つ。tty には LAError の値の代わりに理由と解除方法 (一度パスワードで Mac のロックを解除する) を 1 行出し、`PAM_USER` の GUI セッションがあれば helper に `notify_lockout` を送って、`PAM_USER` に降格した子から通知 (非モーダル、通知センターに残る) を出させる
 - remote が走っている間に Touch ID が失敗しても (生体の不一致、lockout)、remote は止めず、Touch ID 側だけを終える
 - 「詳細を確認」の fallback ボタンは常に出す。押された時に remote が使えない (helper が `unavailable` を返した後、または `open` に helper が応えられない) なら、両方を止めて `PAM_AUTH_ERR`
 - キャンセルは両方を止めて `PAM_AUTH_ERR`
