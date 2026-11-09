@@ -5,6 +5,8 @@ fn main() {
     // `_read-user` checks its parent with the module's own process and signature checks.
     const SIGNATURE_SHIM: &str = "../pam_passkey/src/signature.c";
     const PROCESS_SHIM: &str = "../pam_passkey/src/process.c";
+    // The helper logs through the module's unified logging shim (category "helper").
+    const LOG_SHIM: &str = "../pam_passkey/src/log.c";
     for source in [
         "src/keychain_acl.c",
         "src/browser.c",
@@ -12,6 +14,7 @@ fn main() {
         TOUCH_ID_SHIM,
         SIGNATURE_SHIM,
         PROCESS_SHIM,
+        LOG_SHIM,
         "build.rs",
     ] {
         println!("cargo:rerun-if-changed={source}");
@@ -29,6 +32,7 @@ fn main() {
     cc::Build::new()
         .file(SIGNATURE_SHIM)
         .file(PROCESS_SHIM)
+        .file(LOG_SHIM)
         .compile("process_checks");
     cc::Build::new()
         .file(TOUCH_ID_SHIM)

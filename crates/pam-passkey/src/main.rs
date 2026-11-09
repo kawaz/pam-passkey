@@ -3,6 +3,7 @@ mod auth;
 mod cbor;
 mod child;
 mod language;
+mod log;
 mod passkeys;
 mod records;
 mod settings;

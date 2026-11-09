@@ -5,6 +5,7 @@
 //! assertion (DR-0006).
 
 use crate::child::{RunAs, current_user};
+use crate::log;
 use crate::records::{parse_verification_jwk, trusted_credentials};
 use crate::settings::{Config, Page, read_optional};
 use crate::store::{Fetched, MAX_ASSERTION, MAX_REQUEST, Store};
@@ -73,6 +74,12 @@ impl Ending {
     fn reported(&self) -> bool {
         matches!(self, Self::Judged(_) | Self::Expired)
     }
+}
+
+/// A failure or warning: on the helper's standard error and in the unified log.
+fn warn(message: &str) {
+    eprintln!("pam-passkey: {message}");
+    log::failure(message);
 }
 
 fn emit(event: &HelperEvent) -> std::io::Result<()> {
@@ -248,7 +255,7 @@ pub fn serve(
             Ok(Some(line)) => match serde_json::from_slice::<HelperCommand>(&line) {
                 Ok(HelperCommand::Finish { pass }) => return Ending::Finished { pass },
                 Ok(command) => act(command),
-                Err(_) => eprintln!("pam-passkey: ignored an unknown command line"),
+                Err(_) => warn("ignored an unknown command line"),
             },
             Ok(None) | Err(RecvTimeoutError::Disconnected) => return Ending::Cancelled,
             Err(RecvTimeoutError::Timeout) => {
@@ -316,21 +323,25 @@ impl Remote<'_> {
         let request =
             serde_json::to_vec(&request).map_err(|_| UnavailableReason::StoreUnreachable)?;
         if request.len() > MAX_REQUEST {
-            eprintln!(
-                "pam-passkey: the request is {} bytes, over the {MAX_REQUEST}-byte limit",
+            warn(&format!(
+                "the request is {} bytes, over the {MAX_REQUEST}-byte limit",
                 request.len()
-            );
+            ));
             return Err(UnavailableReason::StoreUnreachable);
         }
         let timeout = REQUEST_TIMEOUT.min(self.deadline.saturating_duration_since(Instant::now()));
         match self.store.put(&request_key, &request, false, timeout) {
-            Ok(200) => {}
+            Ok(200) => log::step(&format!(
+                "request {id}: request PUT ({} bytes, {} allowed credentials)",
+                request.len(),
+                self.credentials.ids().len()
+            )),
             Ok(status) => {
-                eprintln!("pam-passkey: PUT of the request answered HTTP {status}");
+                warn(&format!("PUT of the request answered HTTP {status}"));
                 return Err(UnavailableReason::StoreUnreachable);
             }
             Err(error) => {
-                eprintln!("pam-passkey: PUT of the request: {error}");
+                warn(&format!("PUT of the request: {error}"));
                 return Err(UnavailableReason::StoreUnreachable);
             }
         }
@@ -340,17 +351,27 @@ impl Remote<'_> {
             self.page.url,
             self.store.presign_get(&request_key, valid_for)
         );
+        // The approval URL is a capability: it is delivered, never logged.
         match self.send_command {
-            Some(command) => effects.send(command, &approval_url),
-            None => effects.emit(&HelperEvent::Url {
-                url: approval_url.clone(),
-            }),
+            Some(command) => {
+                log::step(&format!("request {id}: approval URL to send_command"));
+                effects.send(command, &approval_url);
+            }
+            None => {
+                log::step(&format!("request {id}: approval URL to PAM (url event)"));
+                effects.emit(&HelperEvent::Url {
+                    url: approval_url.clone(),
+                });
+            }
         }
 
-        let mut act = |command| match command {
-            HelperCommand::Open => effects.open(&approval_url),
-            HelperCommand::Reactivate => effects.reactivate(&approval_url),
-            HelperCommand::Finish { .. } => {}
+        let mut act = |command| {
+            log::step(&format!("request {id}: command {command:?}"));
+            match command {
+                HelperCommand::Open => effects.open(&approval_url),
+                HelperCommand::Reactivate => effects.reactivate(&approval_url),
+                HelperCommand::Finish { .. } => {}
+            }
         };
         let poll = |left: Duration| {
             match self
@@ -359,25 +380,33 @@ impl Remote<'_> {
             {
                 Ok(Fetched::Missing) => None,
                 // The first object found decides; later overwrites are never read (DR-0006).
-                Ok(Fetched::Found(body)) => Some(Ending::Judged(verify_assertion(
-                    &body,
-                    &Expectation {
-                        request: &request,
-                        page: self.page,
-                        credentials: self.credentials,
-                        expires: self.expires,
-                        now: unix_now(),
-                    },
-                ))),
+                Ok(Fetched::Found(body)) => {
+                    let verdict = verify_assertion(
+                        &body,
+                        &Expectation {
+                            request: &request,
+                            page: self.page,
+                            credentials: self.credentials,
+                            expires: self.expires,
+                            now: unix_now(),
+                        },
+                    );
+                    log::step(&format!(
+                        "request {id}: assertion received ({} bytes): {verdict:?}",
+                        body.len()
+                    ));
+                    Some(Ending::Judged(verdict))
+                }
                 Ok(Fetched::TooLarge) => Some(Ending::Judged(Err(Rejection::TooLarge))),
                 Err(error) => {
-                    eprintln!("pam-passkey: polling for the assertion: {error}");
+                    warn(&format!("polling for the assertion: {error}"));
                     None
                 }
             }
         };
         let ending = serve(lines, self.deadline, POLL_INTERVAL, &mut act, poll);
         eprintln!("pam-passkey: request ended: {ending:?}");
+        log::step(&format!("request {id}: ended {ending:?}"));
         self.conclude(
             &ending,
             effects,
@@ -399,10 +428,14 @@ impl Remote<'_> {
         let left = || until.saturating_duration_since(Instant::now());
         let pass = ending.pass();
         let body: &[u8] = if pass { b"pass" } else { b"fail" };
+        let id = &self.input.id;
         match self.store.put(result_key, body, false, left()) {
-            Ok(200) => {}
-            Ok(status) => eprintln!("pam-passkey: PUT of the result answered HTTP {status}"),
-            Err(error) => eprintln!("pam-passkey: PUT of the result: {error}"),
+            Ok(200) => log::step(&format!(
+                "request {id}: result PUT ({})",
+                if pass { "pass" } else { "fail" }
+            )),
+            Ok(status) => warn(&format!("PUT of the result answered HTTP {status}")),
+            Err(error) => warn(&format!("PUT of the result: {error}")),
         }
         if ending.reported() {
             effects.emit(&HelperEvent::Result {
@@ -412,11 +445,12 @@ impl Remote<'_> {
         }
         for key in deleted {
             if left().is_zero() {
-                eprintln!("pam-passkey: no time left to delete {key}");
+                warn(&format!("no time left to delete {key}"));
                 continue;
             }
-            if let Err(error) = self.store.delete(key, left()) {
-                eprintln!("pam-passkey: DELETE of {key}: {error}");
+            match self.store.delete(key, left()) {
+                Ok(()) => log::step(&format!("request {id}: DELETE {key}")),
+                Err(error) => warn(&format!("DELETE of {key}: {error}")),
             }
         }
     }
@@ -431,7 +465,7 @@ struct Helper<'a> {
 impl Effects for Helper<'_> {
     fn emit(&mut self, event: &HelperEvent) {
         if let Err(error) = emit(event) {
-            eprintln!("pam-passkey: writing an event: {error}");
+            warn(&format!("writing an event: {error}"));
         }
     }
 
@@ -447,25 +481,28 @@ impl Effects for Helper<'_> {
             if let Some(mut stdin) = child.stdin.take()
                 && let Err(error) = writeln!(stdin, "{url}")
             {
-                eprintln!("pam-passkey: writing the URL to send_command: {error}");
+                warn(&format!("writing the URL to send_command: {error}"));
             }
             Ok(child)
         });
         match spawned {
-            Ok(child) => self.sent = Some(child),
-            Err(error) => eprintln!("pam-passkey: warning: send_command could not start: {error}"),
+            Ok(child) => {
+                log::step(&format!("send_command started (pid {})", child.id()));
+                self.sent = Some(child);
+            }
+            Err(error) => warn(&format!("warning: send_command could not start: {error}")),
         }
     }
 
     fn open(&mut self, url: &str) {
         if let Err(error) = open_page(self.run_as, url) {
-            eprintln!("pam-passkey: {error}");
+            warn(&format!("{error}"));
         }
     }
 
     fn reactivate(&mut self, url: &str) {
         if let Err(error) = activate_browser(self.run_as, url) {
-            eprintln!("pam-passkey: {error}");
+            warn(&format!("{error}"));
         }
     }
 }
@@ -477,11 +514,11 @@ impl Drop for Helper<'_> {
         };
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {
-                eprintln!("pam-passkey: warning: send_command exited with {status}");
+                warn(&format!("warning: send_command exited with {status}"));
             }
-            Ok(Some(_)) => {}
+            Ok(Some(status)) => log::step(&format!("send_command exited with {status}")),
             Ok(None) | Err(_) => {
-                eprintln!("pam-passkey: warning: send_command was still running; stopped it");
+                warn("warning: send_command was still running; stopped it");
                 let _ = child.kill();
                 let _ = child.wait();
             }
@@ -497,7 +534,7 @@ fn verification_key() -> Result<Option<ed25519_dalek::VerifyingKey>, Box<dyn Err
         .as_deref()
         .and_then(parse_verification_jwk);
     if key.is_none() {
-        eprintln!("pam-passkey: no usable verification key in the System Keychain (run setup)");
+        warn("no usable verification key in the System Keychain (run setup)");
     }
     Ok(key)
 }
@@ -520,11 +557,15 @@ pub fn user_settings(
 ) -> Result<UserSettings, UnavailableReason> {
     let records = items.records.ok_or(UnavailableReason::NoCredentials)?;
     let Some(config) = items.config else {
-        eprintln!("pam-passkey: no settings for user {user} (run pam-passkey setup as {user})");
+        warn(&format!(
+            "no settings for user {user} (run pam-passkey setup as {user})"
+        ));
         return Err(UnavailableReason::StoreUnreachable);
     };
     let config: Config = serde_json::from_str(&config).map_err(|error| {
-        eprintln!("pam-passkey: the settings of user {user} are not valid: {error}");
+        warn(&format!(
+            "the settings of user {user} are not valid: {error}"
+        ));
         UnavailableReason::StoreUnreachable
     })?;
     let verification_key = verification_key.ok_or(UnavailableReason::NoCredentials)?;
@@ -533,11 +574,11 @@ pub fn user_settings(
         return Err(UnavailableReason::NoCredentials);
     }
     let page = Page::parse(&config.page_url).map_err(|error| {
-        eprintln!("pam-passkey: the page_url of user {user}: {error}");
+        warn(&format!("the page_url of user {user}: {error}"));
         UnavailableReason::StoreUnreachable
     })?;
     let store = Store::new(&config.store).map_err(|error| {
-        eprintln!("pam-passkey: the store of user {user}: {error}");
+        warn(&format!("the store of user {user}: {error}"));
         UnavailableReason::StoreUnreachable
     })?;
     Ok(UserSettings {
@@ -561,10 +602,37 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("the request has already expired")?;
     let deadline = Instant::now() + Duration::from_secs(remaining);
 
-    let unavailable = |reason| emit(&HelperEvent::Unavailable { reason });
+    let id = input.id.clone();
+    let unavailable = |reason| {
+        warn(&format!("request {id}: unavailable {reason:?}"));
+        emit(&HelperEvent::Unavailable { reason })
+    };
     let run_as = RunAs::for_user(&input.user)?;
+    log::step(&format!(
+        "request {id}: helper for user {} ({})",
+        input.user,
+        match run_as {
+            RunAs::Dropped(_) => "root; PAM_USER's keychain through _read-user",
+            RunAs::Inherited => "not root; reads its own keychain",
+        }
+    ));
     let items = match read_user(&input.user, &run_as)? {
-        UserRead::Found(items) => items,
+        UserRead::Found(items) => {
+            log::step(&format!(
+                "request {id}: login keychain: config {}, passkey records {}",
+                if items.config.is_some() {
+                    "found"
+                } else {
+                    "absent"
+                },
+                if items.records.is_some() {
+                    "found"
+                } else {
+                    "absent"
+                }
+            ));
+            items
+        }
         UserRead::Locked => return Ok(unavailable(UnavailableReason::KeychainLocked)?),
     };
     let UserSettings {

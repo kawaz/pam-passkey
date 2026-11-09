@@ -120,6 +120,9 @@ pub struct Current {
     pub page_url: Option<String>,
     pub store: Option<StoreConfig>,
     pub send_command: Option<String>,
+    /// The values come from the login keychain's `config`, not from an earlier version's System
+    /// Keychain items or the template: only then is an unchanged document already in place.
+    pub stored: bool,
 }
 
 impl Current {
@@ -134,6 +137,7 @@ impl Current {
                     page_url: Some(config.page_url),
                     store: Some(config.store),
                     send_command: Some(config.send_command),
+                    stored: true,
                 })
             }
             Err(KeychainError::NotFound) => Ok(Self::from_system_keychain()),
@@ -150,6 +154,7 @@ impl Current {
             page_url: read(SystemItem::PageUrl),
             store: read(SystemItem::Store).and_then(|text| serde_json::from_str(&text).ok()),
             send_command: read(SystemItem::SendCommand),
+            stored: false,
         }
     }
 }
@@ -469,6 +474,20 @@ fn edit(original: &str, editor: &str) -> Result<Option<String>, Box<dyn Error>> 
     Ok((edited != original).then_some(edited))
 }
 
+/// What `--edit` applies: the edited document, or the unchanged one when its values are not
+/// stored yet (an earlier version's System Keychain items, to be moved to the login keychain).
+/// `None` when nothing is to be written.
+fn to_apply(original: String, edited: Option<String>, current: &Current) -> Option<String> {
+    match edited {
+        Some(edited) => Some(edited),
+        None if !current.stored && current.store.is_some() => {
+            eprintln!("setup: storing these settings in your login keychain");
+            Some(original)
+        }
+        None => None,
+    }
+}
+
 #[derive(PartialEq, Eq)]
 enum Mode {
     Edit,
@@ -520,6 +539,16 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             if module.is_some() || page_argument.is_some() {
                 return Err("--dump takes no other arguments".into());
             }
+            if !current.stored {
+                eprintln!(
+                    "setup: your login keychain has no settings yet; this is {} (run pam-passkey setup to store them)",
+                    if current.store.is_some() {
+                        "what an earlier setup left in the System Keychain"
+                    } else {
+                        "a template"
+                    }
+                );
+            }
             print!("{}", dump(&current));
             return Ok(());
         }
@@ -529,8 +558,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
                 print!("{HELP}");
                 return Ok(());
             }
-            match edit(&dump(&current), &editor())? {
-                Some(edited) => edited,
+            let original = dump(&current);
+            let edited = edit(&original, &editor())?;
+            match to_apply(original, edited, &current) {
+                Some(text) => text,
                 None => {
                     eprintln!("setup: no changes");
                     return Ok(());
@@ -637,6 +668,7 @@ mod tests {
                 put_once: true,
             }),
             send_command: Some("notify".into()),
+            stored: true,
         }
     }
 
@@ -760,6 +792,31 @@ mod tests {
         assert!(Current::read(&keychain).is_err());
     }
 
+    // An unchanged document is written when its values are not stored yet (they came from an
+    // earlier version's System Keychain items), and not when they are, or for the bare template.
+    #[test]
+    fn unchanged_settings_are_stored_once() {
+        let stored = current();
+        let legacy = Current {
+            stored: false,
+            ..current()
+        };
+        let original = dump(&stored);
+        assert_eq!(to_apply(original.clone(), None, &stored), None);
+        assert_eq!(
+            to_apply(original.clone(), None, &legacy),
+            Some(original.clone())
+        );
+        assert_eq!(
+            to_apply(dump(&Current::default()), None, &Current::default()),
+            None
+        );
+        assert_eq!(
+            to_apply(original, Some("edited".into()), &stored),
+            Some("edited".into())
+        );
+    }
+
     // A document that is not the settings is refused before anything else happens.
     #[test]
     fn invalid_documents_are_refused() {
@@ -853,6 +910,7 @@ mod tests {
             page_url: Some(stored.page_url),
             store: Some(stored.store),
             send_command: Some(stored.send_command),
+            stored: true,
         };
         let again = parse(&dump(&current), &current).unwrap();
         assert_eq!(again.store.secret, config.secret);

@@ -3,6 +3,7 @@
 
 mod helper;
 mod interrupt;
+mod log;
 mod machine;
 mod process;
 mod touch_id;
@@ -281,6 +282,19 @@ fn touch_unavailable_message(
     }
 }
 
+/// A helper report for the log: the event names and reasons, never a URL.
+fn describe_report(report: &helper::Report) -> String {
+    use helper::Report;
+    match report {
+        Report::Event(HelperEvent::Unavailable { reason }) => format!("unavailable {reason:?}"),
+        Report::Event(HelperEvent::Url { .. }) => "url".into(),
+        Report::Event(HelperEvent::Result { pass, .. }) => format!("result pass={pass}"),
+        Report::Malformed => "a malformed line".into(),
+        Report::Closed => "the end of its output".into(),
+        Report::WriteFailed { command } => format!("a failed write ({command:?})"),
+    }
+}
+
 fn helper_input(id: &str, event: helper::Report) -> Option<Input> {
     use helper::Report;
     Some(match event {
@@ -373,6 +387,7 @@ impl Driver {
     fn input(&mut self, event: Event) -> Option<Input> {
         match event {
             Event::Touch(TouchReport::Started) => {
+                log::step(&format!("request {}: Touch ID dialog shown", self.id));
                 if std::mem::take(&mut self.open_due)
                     && let Some(helper) = &self.helper
                 {
@@ -384,6 +399,10 @@ impl Driver {
             Event::Touch(TouchReport::Ended { answer, restored }) => {
                 self.round_live = false;
                 let input = touch_input(answer, restored);
+                log::step(&format!(
+                    "request {}: Touch ID ended: answer {answer:?}, euid restored {restored} -> {input:?}",
+                    self.id
+                ));
                 if input == Input::TouchUnavailable
                     && let Some(conv) = self.conv
                 {
@@ -396,13 +415,27 @@ impl Driver {
                 Some(input)
             }
             Event::Helper(helper::Report::Event(HelperEvent::Url { url })) => {
+                log::step(&format!(
+                    "request {}: helper sent the approval URL (shown on the terminal: {})",
+                    self.id,
+                    self.conv.is_some()
+                ));
                 if let Some(conv) = self.conv {
                     // SAFETY: the conversation belongs to the ongoing pam_sm_authenticate call.
                     inform(unsafe { &*conv }, &approval_message(&url, self.japanese));
                 }
                 None
             }
-            Event::Helper(report) => helper_input(&self.id, report),
+            Event::Helper(report) => {
+                // Events carry no secrets; the URL event is handled above.
+                let described = describe_report(&report);
+                let input = helper_input(&self.id, report);
+                log::step(&format!(
+                    "request {}: helper reported {described} -> {input:?}",
+                    self.id
+                ));
+                input
+            }
             Event::Interrupted => Some(Input::Interrupted),
         }
     }
@@ -443,11 +476,13 @@ impl Driver {
         {
             helper.send(HelperCommand::Finish { pass: true });
         }
-        match outcome {
-            Outcome::TouchSuccess | Outcome::RemoteSuccess => PAM_SUCCESS,
-            Outcome::AuthErr => PAM_AUTH_ERR,
-            Outcome::Ignore => PAM_IGNORE,
-        }
+        let (code, name) = match outcome {
+            Outcome::TouchSuccess | Outcome::RemoteSuccess => (PAM_SUCCESS, "PAM_SUCCESS"),
+            Outcome::AuthErr => (PAM_AUTH_ERR, "PAM_AUTH_ERR"),
+            Outcome::Ignore => (PAM_IGNORE, "PAM_IGNORE"),
+        };
+        log::step(&format!("request {}: ended {outcome:?} -> {name}", self.id));
+        code
     }
 }
 
@@ -462,21 +497,27 @@ unsafe fn authenticate(
     if pamh.is_null() {
         return PAM_IGNORE;
     }
-    // 1. PAM_USER, its uid and whether it has the GUI session.
+    // 1. PAM_USER and its uid.
     let mut user: *const c_char = std::ptr::null();
     // SAFETY: PAM owns the handle and the returned string for this call.
     if unsafe { pam_get_user(pamh, &mut user, std::ptr::null()) } != PAM_SUCCESS || user.is_null() {
+        log::failure("no PAM_USER -> PAM_IGNORE");
         return PAM_IGNORE;
     }
     // SAFETY: PAM keeps `user` alive until the authenticate callback returns.
     let Ok(user) = unsafe { CStr::from_ptr(user) }.to_str() else {
+        log::failure("PAM_USER is not UTF-8 -> PAM_IGNORE");
         return PAM_IGNORE;
     };
     if user.is_empty() || user.contains('/') {
+        log::failure("PAM_USER is empty or has a slash -> PAM_IGNORE");
         return PAM_IGNORE;
     }
     let user = user.to_owned();
     let Some((pam_uid, pam_home)) = user_of(&user) else {
+        log::failure(&format!(
+            "PAM_USER {user} is not in the user database -> PAM_IGNORE"
+        ));
         return PAM_IGNORE;
     };
     let plan = touch_plan(pam_uid);
@@ -515,18 +556,43 @@ unsafe fn authenticate(
         },
     };
     let deadline = Instant::now() + REQUEST_LIFETIME;
+    // SAFETY: the session shim only reads the caller's own security and audit session.
+    let gui_session = unsafe { passkey_gui_session_of(pam_uid) };
+    // SAFETY: getuid / geteuid have no preconditions.
+    let (ruid, euid) = unsafe { (libc::getuid(), libc::geteuid()) };
+    log::step(&format!(
+        "request {id}: user {} (uid {pam_uid}), service {service}, ruid {ruid}, euid {euid}, tty {}, GUI session {gui_session}, Touch ID plan {plan:?}",
+        input.user,
+        if input.tty.is_some() { "yes" } else { "no" },
+    ));
 
     // 3. Helper: placement check, spawn, signature check, input line.
     let (sender, events) = channel();
-    let helper = module_arguments(argc, argv)
-        .and_then(|arguments| helper_path(&arguments))
-        .and_then(|path| {
+    let helper = match module_arguments(argc, argv).and_then(|arguments| helper_path(&arguments)) {
+        None => {
+            log::failure(&format!(
+                "request {id}: module arguments not understood (only helper=<absolute path>); no helper"
+            ));
+            None
+        }
+        Some(path) => {
             let sender = sender.clone();
-            helper::spawn(Path::new(&path), &input, deadline, move |report| {
+            match helper::spawn(Path::new(&path), &input, deadline, move |report| {
                 let _ = sender.send(Event::Helper(report));
-            })
-            .ok()
-        });
+            }) {
+                Ok(helper) => {
+                    log::step(&format!(
+                        "request {id}: helper {path} started (placement and signature checked)"
+                    ));
+                    Some(helper)
+                }
+                Err(error) => {
+                    log::failure(&format!("request {id}: helper {path} not used: {error:?}"));
+                    None
+                }
+            }
+        }
+    };
 
     // 4. Touch ID, with the euid dropped only after the spawn above.
     let mut conv: *const c_void = std::ptr::null();
@@ -547,8 +613,7 @@ unsafe fn authenticate(
         helper,
         plan,
         japanese,
-        // SAFETY: the session shim only reads the caller's own security and audit session.
-        gui_session: unsafe { passkey_gui_session_of(pam_uid) },
+        gui_session,
         reason,
         id,
         deadline,

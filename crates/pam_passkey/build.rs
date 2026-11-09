@@ -2,6 +2,7 @@ fn main() {
     for source in [
         "src/signature.c",
         "src/process.c",
+        "src/log.c",
         "src/touch_id.m",
         "build.rs",
     ] {
@@ -10,6 +11,7 @@ fn main() {
     cc::Build::new()
         .file("src/signature.c")
         .file("src/process.c")
+        .file("src/log.c")
         .compile("pam_passkey_c");
     cc::Build::new()
         .file("src/touch_id.m")
