@@ -18,4 +18,10 @@
 
 ## 裁定待ち
 
+### 👺PK-Q5: Touch ID の評価を PAM モジュール内 (seteuid) から helper の PAM_USER に降格した子へ移すか。あわせて「詳細を確認」後のダイアログの出し直しを、自動でなくページのボタン (「この Mac の Touch ID で認証」) からの要求にするか
+
+- [ ] a (推奨): 両方やる (新 DR-0013)。helper の子で LAContext を評価 (診断で成立を確認済み: findings/2026-11-09-end-to-end.md)。PAM 内の seteuid・LocalAuthentication が消え、seteuid の順序問題も消える。出し直しはページの要求時だけ (前面の競合が消える)。欠点: helper が起動できない (置き場 / 署名検査落ち) と Touch ID も使えずパスワードになる
+- [ ] b: Touch ID は PAM 内のまま、出し直しだけページの要求に
+- [ ] c: 現状維持
+
 ## 確認待ち
