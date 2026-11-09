@@ -724,6 +724,7 @@ mod tests {
     // passkey records; a rerun replaces them and the next read sees the new ones. Rewriting an
     // existing item updates its data only: re-setting its ACL would put up a Keychain dialog.
     #[test]
+    #[ignore = "uses Security.framework keychains (a throwaway one, but its dialogs reach the user); run only on request: cargo test -- --ignored settings_live"]
     fn settings_live_in_the_login_keychain() {
         let login = crate::test_support::TemporaryLogin::create();
         let keychain = login.keychain();
