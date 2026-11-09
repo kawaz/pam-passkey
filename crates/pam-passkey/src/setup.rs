@@ -481,7 +481,9 @@ fn to_apply(original: String, edited: Option<String>, current: &Current) -> Opti
     match edited {
         Some(edited) => Some(edited),
         None if !current.stored && current.store.is_some() => {
-            eprintln!("setup: storing these settings in your login keychain");
+            eprintln!(
+                "setup: no settings in your login keychain yet; storing the document as shown"
+            );
             Some(original)
         }
         None => None,
