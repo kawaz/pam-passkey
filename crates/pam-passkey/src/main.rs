@@ -35,8 +35,8 @@ Commands:
 Commands (internal, started by pam_passkey.so, the helper itself or setup):
   _setup-write                       Create the System Keychain signing key (as root)
   _auth                              Serve one authentication request (helper-protocol on stdin/stdout)
-  _read-user <user>                  Print the user's settings and signed passkey records from the
-                                     login keychain as one JSON line (exit 3: locked)
+  _read-user <user>                  For the root helper only: print the user's settings and signed
+                                     passkey records from the login keychain (exit 3: locked)
   _open-page                         Open the URL read from stdin in the default browser
   _activate-browser                  Bring the default browser for the URL read from stdin to the front
 
@@ -108,25 +108,19 @@ fn probe_dialog(reason: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// `_read-user`: runs as the user whose login keychain it reads, and prints its `config` and
-/// `users/<user>` items for the helper (one JSON line; an absent item is null).
+/// `_read-user`: started by the root helper as the user whose login keychain it reads; prints
+/// its `config` and `users/<user>` items as one JSON line (an absent item is null). Started any
+/// other way it prints nothing: the settings carry the store's secret.
 fn read_user(user: &str) -> i32 {
+    if !auth::started_by_root_helper() {
+        eprintln!("pam-passkey: _read-user answers only to the root helper");
+        return 1;
+    }
     let result = current_user().and_then(|(current, home)| {
         if user != current {
             return Err("read requested for another OS user".into());
         }
-        let keychain = Keychain::login(Path::new(&home))?;
-        let optional = |read: Result<String, KeychainError>| match read {
-            Ok(text) => Ok(Some(text)),
-            Err(KeychainError::NotFound) => Ok(None),
-            Err(error) => Err(error),
-        };
-        Ok(optional(keychain.read_user(user)).and_then(|records| {
-            Ok(auth::UserItems {
-                config: optional(keychain.read_config())?,
-                records,
-            })
-        }))
+        Ok(auth::read_own_items(user, Path::new(&home)))
     });
     match result {
         Ok(Ok(items)) => match serde_json::to_string(&items) {

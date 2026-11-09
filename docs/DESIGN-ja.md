@@ -133,7 +133,7 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 - Keychain の項目の読み書きは `pam-passkey` バイナリ (Developer ID 署名) に限定し、全項目の ACL をこのバイナリに絞る。PAM モジュールは Keychain を読まない。ad-hoc 署名は build ごとに変わって ACL が外れるので、Developer ID 署名が前提
 - root が要るのは System Keychain に署名鍵を作る時だけ (初回の `setup` と `regenerate_key` の時。`setup` がその瞬間だけ自分を sudo で再実行する)。System Keychain の既存項目の変更には管理者認証のダイアログが出るので、署名鍵は作った後は触らない。`setup` / `add` / `del` / `list` はユーザ権限で動き、自分の login keychain を読み書きする
 - `setup` は署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。再実行で署名鍵を作り直すと、既存の登録は全て無効になる (再 `add`)。署名鍵は設定の JSON の `regenerate_key` が true の時だけ作り直し (既定は既存の鍵を残して設定だけを更新)、`--edit` では作り直す前に y/N で確認する ([DR-0010](./decisions/DR-0010-cli-shape.md))
-- 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`config` と `users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
+- 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`config` と `users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む。helper が root でない時は helper 自身が読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
 - ユーザ権限のプロセスが勝手に鍵を登録して自分の認証を承認する経路の塞ぎ方は [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
 - 設定 (`page_url` / `store` / `send_command`) はユーザ単位。認証では `PAM_USER` の設定を使うので、同じ Mac でもユーザごとに別のストアと `send_command` になる。passkey を登録するユーザはそれぞれ `setup` を実行する
 

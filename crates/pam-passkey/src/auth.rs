@@ -9,11 +9,12 @@ use crate::records::{parse_verification_jwk, trusted_credentials};
 use crate::settings::{Config, Page, read_optional};
 use crate::store::{Fetched, MAX_ASSERTION, MAX_REQUEST, Store};
 use crate::webauthn::{CredentialSet, Expectation, Rejection, verify_assertion};
-use pam_passkey::keychain::{Keychain, SystemItem};
+use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
 use protocol::encoding::parse_utc;
 use protocol::{ExchangeRequest, HelperCommand, HelperEvent, HelperInput, UnavailableReason};
 use std::error::Error;
 use std::io::{BufRead, Read, Write};
+use std::path::Path;
 use std::process::{Child, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -122,18 +123,44 @@ fn unix_now() -> i64 {
 fn read_user(user: &str, run_as: &RunAs) -> Result<UserRead, Box<dyn Error>> {
     match run_as {
         // root has no passkeys and no biometry (DR-0012); its login keychain is never read.
-        RunAs::Dropped(identity) if identity.uid == 0 => {
-            return Ok(UserRead::Found(UserItems::default()));
-        }
-        RunAs::Dropped(_) => {}
+        RunAs::Dropped(identity) if identity.uid == 0 => Ok(UserRead::Found(UserItems::default())),
+        RunAs::Dropped(_) => read_through_child(user, run_as),
+        // Not root: the helper runs as the caller, which must be PAM_USER, and reads its own
+        // login keychain itself.
         RunAs::Inherited => {
-            if current_user()?.0 != user {
+            let (current, home) = current_user()?;
+            if current != user {
                 return Err(
                     "not root and PAM_USER is another user; cannot read its keychain".into(),
                 );
             }
+            match read_own_items(user, &home) {
+                Ok(items) => Ok(UserRead::Found(items)),
+                Err(KeychainError::Locked(_) | KeychainError::AccessDenied(_)) => {
+                    Ok(UserRead::Locked)
+                }
+                Err(error) => Err(error.into()),
+            }
         }
     }
+}
+
+/// `config` and `users/<user>` from the login keychain under `home`; an absent item is `None`.
+pub fn read_own_items(user: &str, home: &Path) -> Result<UserItems, KeychainError> {
+    let keychain = Keychain::login(home)?;
+    let optional = |read: Result<String, KeychainError>| match read {
+        Ok(text) => Ok(Some(text)),
+        Err(KeychainError::NotFound) => Ok(None),
+        Err(error) => Err(error),
+    };
+    Ok(UserItems {
+        records: optional(keychain.read_user(user))?,
+        config: optional(keychain.read_config())?,
+    })
+}
+
+/// The root helper's way: `_read-user` as PAM_USER, which answers only to it.
+fn read_through_child(user: &str, run_as: &RunAs) -> Result<UserRead, Box<dyn Error>> {
     let output = run_as
         .command("_read-user")?
         .arg(user)
@@ -151,6 +178,30 @@ fn read_user(user: &str, run_as: &RunAs) -> Result<UserRead, Box<dyn Error>> {
         None => {
             Err(format!("reading the login keychain of user {user} was killed by a signal").into())
         }
+    }
+}
+
+unsafe extern "C" {
+    // The module's process and signature checks (pam_passkey/src/{process,signature}.c).
+    fn passkey_process_parent(
+        pid: libc::pid_t,
+        parent: *mut libc::pid_t,
+        uid: *mut libc::uid_t,
+    ) -> libc::c_int;
+    fn passkey_verify_pid(pid: libc::c_int) -> i32;
+}
+
+/// Whether this process was started by the root helper: the parent runs with euid 0 and is
+/// the pam-passkey binary (its identifier and Team ID). `_read-user` prints the user's store
+/// secret for the helper alone (DR-0011: ストアの秘密はどのサブコマンドも出力に出さない).
+pub fn started_by_root_helper() -> bool {
+    // SAFETY: getppid has no preconditions; the out-pointers are valid locals.
+    unsafe {
+        let parent = libc::getppid();
+        let (mut grandparent, mut euid) = (0, libc::uid_t::MAX);
+        passkey_process_parent(parent, &mut grandparent, &mut euid) == 0
+            && euid == 0
+            && passkey_verify_pid(parent) == 0
     }
 }
 

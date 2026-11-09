@@ -39,7 +39,7 @@ helper は、承認ページの URL、ストアの接続情報 (秘密を含む)
   - 署名は、本人確認が成功したのと同じプロセス (hardened runtime + Developer ID 署名) の中で行う。同じ uid のプロセスからの制御の改変・署名鍵の覗き見を防ぐ
   - `pam-passkey` バイナリの入口を次の規律で絞る。署名済みのバイナリはどの uid からも起動できるので、正規の入口 (サブコマンド、引数、環境変数、stdin) から秘密を使わせない
     - 署名鍵を読むのは `add` の、本人確認の成功後の 1 か所だけ。PAM から呼ばれる内部サブコマンドは、ユーザ権限から直接起動されても署名鍵を使わない
-    - ストアの秘密 (access key / secret) は利用者自身が `setup` で入れた自分の設定の値で、`setup --dump` は `***` に置き換えて出す。helper へ渡す内部サブコマンド `_read-user` は標準出力に出すので、同じ uid のプロセスは自分の設定の秘密を読める (他のユーザの設定は読めない)
+    - ストアの秘密 (access key / secret) はどのサブコマンドも出力に出さない。root の helper が `PAM_USER` の `config` を受け取る内部サブコマンド `_read-user` は、親プロセスが euid 0 で `pam-passkey` の署名 (identifier と Team ID) を持つ時だけ出力し、それ以外の起動では何も出さずに終わる。helper が root でない時 (呼び出し元が root でない PAM 経路) は、helper 自身が `PAM_USER` として login keychain を直接読む
     - 環境変数で参照先 (Keychain の項目、`page_url`、rp_id) を切り替えられない
   - login keychain のファイルを差し替えても、署名検証で無効になる
 - `del` は悪意あるプロセスにも可能だが、効果は remote 承認が消えてパスワード認証に落ちるだけで、昇格にはならない
