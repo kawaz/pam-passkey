@@ -1,6 +1,6 @@
 ---
 title: Touch ID ダイアログの本文に cwd と祖先チェーンを出す
-status: open
+status: resolved
 category: task
 created: 2026-11-09T02:53:39+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T13:06:01+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["dr/DR-0004","implemented"]
 blocked_by:
 origin: 自リポ TODO
 ---
