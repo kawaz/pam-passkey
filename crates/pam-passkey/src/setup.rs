@@ -1,9 +1,11 @@
 //! `setup` (DR-0010): the settings as one JSON document. `--dump` prints the current ones,
 //! `--stdin` takes a document, `--edit` (the default) opens the current one in `$EDITOR`. The
-//! document is checked as the user; only the write runs as root (`sudo <self> _setup-write`).
+//! document is checked and written as the user, to the user's login keychain (`config`, DR-0011);
+//! only creating the System Keychain signing key runs as root (`sudo <self> _setup-write`).
 
+use crate::passkeys::own_keychain;
 use crate::records::{signing_jwk, verification_jwk};
-use crate::settings::{DEFAULT_PAGE_URL, Page, read_optional};
+use crate::settings::{Config, DEFAULT_PAGE_URL, Page, read_optional};
 use crate::store::{Fetched, Store, StoreConfig, StoreError};
 use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
 use protocol::encoding::base64url;
@@ -51,8 +53,9 @@ The settings document (JSON, one line or formatted):
 
 setup checks the store (and whether it can refuse a second write of the same object), sets the
 bucket's CORS and lifecycle rules (replacing the bucket's existing ones), checks that pam-passkey
-is installed in a root-owned location, and then writes the settings to the System Keychain
-through sudo.
+is installed in a root-owned location, and then writes the settings to your login keychain. The
+settings are per user: each user who registers passkeys runs setup. The first setup on a Mac
+(or regenerate_key) also creates the signing key in the System Keychain, through sudo.
 ";
 
 /// Each store request during setup; setup is interactive, not on PAM's deadline.
@@ -96,15 +99,19 @@ pub struct SetupInput {
     pub regenerate_key: bool,
 }
 
-/// The checked settings, as the root side writes them (`_setup-write`).
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The checked settings and whether the signing key is to be replaced.
+#[derive(Debug, PartialEq, Eq)]
 pub struct Checked {
-    pub page_url: String,
-    pub store: StoreConfig,
-    /// Empty: show the URL on the terminal.
-    pub send_command: String,
+    pub config: Config,
     pub regenerate_key: bool,
+}
+
+/// What `_setup-write` (root) is asked to do: create the signing key if there is none, or
+/// replace it with `regenerate_key`.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyRequest {
+    regenerate_key: bool,
 }
 
 /// The settings a previous setup wrote. `None` for an item that is not there.
@@ -116,18 +123,34 @@ pub struct Current {
 }
 
 impl Current {
-    /// Read as the user (the items' ACL names the pam-passkey binary).
-    fn read() -> Result<Self, Box<dyn Error>> {
-        let keychain = Keychain::system()?;
-        let store = read_optional(&keychain, SystemItem::Store)?
-            .map(|text| serde_json::from_str::<StoreConfig>(&text))
-            .transpose()
-            .map_err(|error| format!("the current store setting is not valid: {error}"))?;
-        Ok(Self {
-            page_url: read_optional(&keychain, SystemItem::PageUrl)?,
-            store,
-            send_command: read_optional(&keychain, SystemItem::SendCommand)?,
-        })
+    /// The user's `config`. Without one, the System Keychain items an earlier version of setup
+    /// wrote serve as the defaults if they can be read; they are never written or used again.
+    fn read(login: &Keychain) -> Result<Self, Box<dyn Error>> {
+        match login.read_config() {
+            Ok(text) => {
+                let config: Config = serde_json::from_str(&text)
+                    .map_err(|error| format!("the current settings are not valid: {error}"))?;
+                Ok(Self {
+                    page_url: Some(config.page_url),
+                    store: Some(config.store),
+                    send_command: Some(config.send_command),
+                })
+            }
+            Err(KeychainError::NotFound) => Ok(Self::from_system_keychain()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn from_system_keychain() -> Self {
+        let Ok(keychain) = Keychain::system() else {
+            return Self::default();
+        };
+        let read = |item| read_optional(&keychain, item).ok().flatten();
+        Self {
+            page_url: read(SystemItem::PageUrl),
+            store: read(SystemItem::Store).and_then(|text| serde_json::from_str(&text).ok()),
+            send_command: read(SystemItem::SendCommand),
+        }
     }
 }
 
@@ -275,9 +298,11 @@ pub fn check(
     }
     Ok((
         Checked {
-            page_url: page.url,
-            store: config,
-            send_command: input.send_command.unwrap_or_default(),
+            config: Config {
+                page_url: page.url,
+                store: config,
+                send_command: input.send_command.unwrap_or_default(),
+            },
             regenerate_key: input.regenerate_key,
         },
         unsupported,
@@ -316,67 +341,64 @@ fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
 }
 
-/// Write what the user side checked. Runs as root.
-fn write(checked: &Checked) -> Result<(), Box<dyn Error>> {
+/// `_setup-write`: create the System Keychain signing key and its verification key, or replace
+/// them with `regenerate_key`. Runs as root; an existing pair is otherwise left alone (a new key
+/// invalidates every registered passkey).
+fn write_keys(request: &KeyRequest) -> Result<(), Box<dyn Error>> {
     if !is_root() {
         return Err("_setup-write writes the System Keychain and must run as root".into());
     }
     check_placement(None)?;
-    let page = Page::parse(&checked.page_url)?;
-    Store::new(&checked.store)?;
     let keychain = Keychain::system()?;
-    // No Keychain dialog may appear behind setup's back: a write that would need one fails
-    // and says so instead.
-    let _no_dialogs =
-        security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()?;
-    let put = |item: SystemItem, name: &str, value: &str| {
-        keychain.write_system(item, value).map_err(|error| match error {
-            KeychainError::AccessDenied(_) => format!(
-                "writing {name} to the System Keychain needs an authorization that setup does not ask for ({error})"
-            ),
-            error => format!("writing {name} to the System Keychain: {error}"),
-        })
-    };
-    put(SystemItem::PageUrl, "page_url", &page.url)?;
-    put(
-        SystemItem::Store,
-        "store",
-        &serde_json::to_string(&checked.store)?,
-    )?;
-    put(
-        SystemItem::SendCommand,
-        "send_command",
-        &checked.send_command,
-    )?;
-    if checked.regenerate_key || !signing_key_exists(&keychain)? {
-        let mut secret = [0u8; 32];
-        security_framework::random::SecRandom::default().copy_bytes(&mut secret)?;
-        let key = ed25519_dalek::SigningKey::from_bytes(&secret);
-        put(SystemItem::SigningKey, "signing_key", &signing_jwk(&key))?;
-        put(
-            SystemItem::VerificationKey,
-            "verification_key",
-            &verification_jwk(&key.verifying_key()),
-        )?;
-        println!("setup: generated a new signing key (register passkeys with `pam-passkey add`)");
-    } else {
+    if !request.regenerate_key && signing_key_exists(&keychain)? {
         println!("setup: kept the existing signing key");
+        return Ok(());
     }
-    println!(
-        "setup: wrote page_url, store and send_command ({})",
-        if checked.send_command.is_empty() {
-            "URLs are shown on the terminal"
-        } else {
-            "URLs go to send_command"
-        }
-    );
+    let mut secret = [0u8; 32];
+    security_framework::random::SecRandom::default().copy_bytes(&mut secret)?;
+    let key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    keychain
+        .write_system(SystemItem::SigningKey, &signing_jwk(&key))
+        .map_err(|error| format!("writing the signing key to the System Keychain: {error}"))?;
+    keychain
+        .write_system(
+            SystemItem::VerificationKey,
+            &verification_jwk(&key.verifying_key()),
+        )
+        .map_err(|error| format!("writing the verification key to the System Keychain: {error}"))?;
+    println!("setup: generated a new signing key (register passkeys with `pam-passkey add`)");
     Ok(())
 }
 
-/// `_setup-write`: the checked settings as one JSON line on standard input. Runs as root.
+/// `_setup-write`: the request as one JSON line on standard input.
 pub fn write_from_stdin() -> Result<(), Box<dyn Error>> {
     let text = read_document(std::io::stdin().lock())?;
-    write(&serde_json::from_str(&text)?)
+    write_keys(&serde_json::from_str(&text)?)
+}
+
+/// The signing key through sudo, unless it exists and is kept.
+fn ensure_keys(executable: &Path, regenerate_key: bool) -> Result<(), Box<dyn Error>> {
+    if !regenerate_key && signing_key_exists(&Keychain::system()?)? {
+        return Ok(());
+    }
+    eprintln!("setup: creating the signing key in the System Keychain (sudo)");
+    let mut sudo = Command::new(SUDO)
+        .arg(executable)
+        .arg("_setup-write")
+        .stdin(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = sudo.stdin.take() {
+        writeln!(
+            stdin,
+            "{}",
+            serde_json::to_string(&KeyRequest { regenerate_key })?
+        )?;
+    }
+    let status = sudo.wait()?;
+    if !status.success() {
+        return Err(format!("creating the signing key through sudo failed: {status}").into());
+    }
+    Ok(())
 }
 
 fn read_document(reader: impl Read) -> Result<String, Box<dyn Error>> {
@@ -483,8 +505,9 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             return Err("give one of --edit, --stdin and --dump".into());
         }
     }
+    let (_, login) = own_keychain()?;
     // --stdin needs the current settings only for a "***" secret; without them that is refused.
-    let current = match Current::read() {
+    let current = match Current::read(&login) {
         Ok(current) => current,
         Err(error) if mode == Some(Mode::Stdin) => {
             eprintln!("setup: could not read the current settings ({error})");
@@ -524,7 +547,11 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
     let (checked, unsupported) = check(input, page_argument.as_deref())?;
     eprintln!(
         "setup: the store works (write-once uploads: {})",
-        if checked.store.put_once { "yes" } else { "no" }
+        if checked.config.store.put_once {
+            "yes"
+        } else {
+            "no"
+        }
     );
     if unsupported.is_empty() {
         eprintln!("setup: set the bucket's CORS and lifecycle rules");
@@ -532,7 +559,10 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
         eprintln!(
             "setup: warning: the store does not implement the bucket's {} API.\n{}",
             unsupported.join(" and "),
-            required_configuration(&Page::parse(&checked.page_url)?, &checked.store)
+            required_configuration(
+                &Page::parse(&checked.config.page_url)?,
+                &checked.config.store
+            )
         );
     }
     // DR-0010: replacing an existing key invalidates every registration; with a terminal the
@@ -548,21 +578,17 @@ pub fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
             eprintln!("setup: replacing the signing key; every registered passkey becomes invalid");
         }
     }
-    if is_root() {
-        return write(&checked);
-    }
-    let mut sudo = Command::new(SUDO)
-        .arg(&executable)
-        .arg("_setup-write")
-        .stdin(Stdio::piped())
-        .spawn()?;
-    if let Some(mut stdin) = sudo.stdin.take() {
-        writeln!(stdin, "{}", serde_json::to_string(&checked)?)?;
-    }
-    let status = sudo.wait()?;
-    if !status.success() {
-        return Err(format!("writing the settings through sudo failed: {status}").into());
-    }
+    // The key first: if sudo is refused, the settings stay as they were.
+    ensure_keys(&executable, checked.regenerate_key)?;
+    login.write_config(&serde_json::to_string(&checked.config)?)?;
+    eprintln!(
+        "setup: wrote your settings to the login keychain ({})",
+        if checked.config.send_command.is_empty() {
+            "URLs are shown on the terminal"
+        } else {
+            "URLs go to send_command"
+        }
+    );
     Ok(())
 }
 
@@ -694,6 +720,45 @@ mod tests {
         );
     }
 
+    // The settings live in the user's login keychain as `config`, beside (not inside) the
+    // passkey records; a rerun replaces them and the next read sees the new ones. Rewriting an
+    // existing item updates its data only: re-setting its ACL would put up a Keychain dialog.
+    #[test]
+    fn settings_live_in_the_login_keychain() {
+        let login = crate::test_support::TemporaryLogin::create();
+        let keychain = login.keychain();
+        assert!(matches!(
+            keychain.read_config(),
+            Err(KeychainError::NotFound)
+        ));
+        let mut config = Config {
+            page_url: "https://pam-passkey.github.io/".into(),
+            store: current().store.unwrap(),
+            send_command: "notify".into(),
+        };
+        keychain
+            .write_config(&serde_json::to_string(&config).unwrap())
+            .unwrap();
+        let read = Current::read(&keychain).unwrap();
+        assert_eq!(read.store.as_ref(), Some(&config.store));
+        assert_eq!(read.send_command.as_deref(), Some("notify"));
+        config.send_command = String::new();
+        keychain
+            .write_config(&serde_json::to_string(&config).unwrap())
+            .unwrap();
+        assert_eq!(
+            Current::read(&keychain).unwrap().send_command.as_deref(),
+            Some("")
+        );
+        assert!(matches!(
+            keychain.read_user("kawaz"),
+            Err(KeychainError::NotFound)
+        ));
+        // A broken item is reported, not taken for "no settings".
+        keychain.write_config("not json").unwrap();
+        assert!(Current::read(&keychain).is_err());
+    }
+
     // A document that is not the settings is refused before anything else happens.
     #[test]
     fn invalid_documents_are_refused() {
@@ -761,12 +826,14 @@ mod tests {
         assert_eq!(
             checked,
             Checked {
-                page_url: "https://example.com:8443/approve/".into(),
-                store: StoreConfig {
-                    put_once: true,
-                    ..config.clone()
+                config: Config {
+                    page_url: "https://example.com:8443/approve/".into(),
+                    store: StoreConfig {
+                        put_once: true,
+                        ..config.clone()
+                    },
+                    send_command: "notify-me".into(),
                 },
-                send_command: "notify-me".into(),
                 regenerate_key: false,
             }
         );
@@ -777,8 +844,16 @@ mod tests {
         let (status, listing) = minio.bucket_get(("list-type", "2"));
         assert_eq!(status, 200, "{listing}");
         assert!(!listing.contains("<Key>"), "{listing}");
-        // What the root side receives round-trips through its JSON line.
-        let line = serde_json::to_string(&checked).unwrap();
-        assert_eq!(serde_json::from_str::<Checked>(&line).unwrap(), checked);
+        // What the login keychain's `config` holds round-trips, and is what --dump shows again.
+        let line = serde_json::to_string(&checked.config).unwrap();
+        let stored: Config = serde_json::from_str(&line).unwrap();
+        assert_eq!(stored, checked.config);
+        let current = Current {
+            page_url: Some(stored.page_url),
+            store: Some(stored.store),
+            send_command: Some(stored.send_command),
+        };
+        let again = parse(&dump(&current), &current).unwrap();
+        assert_eq!(again.store.secret, config.secret);
     }
 }

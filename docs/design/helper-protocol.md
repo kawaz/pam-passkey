@@ -34,7 +34,7 @@
 
 | イベント | 意味 |
 |---|---|
-| `{"event":"unavailable","reason":"no-credentials"}`<br>`{"event":"unavailable","reason":"store-unreachable"}`<br>`{"event":"unavailable","reason":"keychain-locked"}` | remote が使えない (順に、`PAM_USER` の登録が 0 件 / ストアに届かない / `PAM_USER` の login keychain が unlock されていない) |
+| `{"event":"unavailable","reason":"no-credentials"}`<br>`{"event":"unavailable","reason":"store-unreachable"}`<br>`{"event":"unavailable","reason":"keychain-locked"}` | remote が使えない (順に、`PAM_USER` の登録が 0 件 / ストアに届かないか `PAM_USER` の設定 (`config`) が無い / `PAM_USER` の login keychain が unlock されていない) |
 | `{"event":"url","url":"..."}` | `send_command` が未設定の時に送る承認 URL。PAM が conversation の `PAM_TEXT_INFO` で tty に出す。helper は自分では表示しない |
 | `{"event":"result","id":"<要求 ID>","pass":true}`<br>`{"event":"result","id":"<要求 ID>","pass":false}` | remote の結果 |
 

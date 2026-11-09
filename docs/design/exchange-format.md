@@ -90,7 +90,7 @@
 ### ストアのオブジェクトのキーと `store` 設定
 
 - オブジェクトのキーは `<prefix><要求 ID>/request` / `.../assertion` / `.../result` (登録は `.../registration` / `.../credential`)。`prefix` は文字列としてそのまま前に付ける
-- `store` (System Keychain) の JSON のキー: `endpoint` / `bucket` / `region` / `prefix` / `access_key` / `secret` / `put_once`。アドレスは path-style
+- `store` (ユーザの login keychain の `config` の中) の JSON のキー: `endpoint` / `bucket` / `region` / `prefix` / `access_key` / `secret` / `put_once`。アドレスは path-style
 - `put_once` が true のとき presigned PUT は `X-Amz-SignedHeaders` に `if-none-match` を含むので、ページは PUT に `If-None-Match: *` を付ける
 
 ### サイズ上限

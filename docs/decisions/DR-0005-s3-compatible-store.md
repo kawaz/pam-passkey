@@ -13,7 +13,7 @@ Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要�
 - ページからの読み書きは helper が発行する presigned URL (GET / PUT) で行う。presigned URL が期限付きの capability を兼ねる
 - presigned GET を使うことで、バケットに公開読みのポリシーを設定せずに済ませる
 - presigned PUT (assertion / credential) は、ストアが対応していれば `If-None-Match: *` を署名ヘッダに含めて 1 回限りにする。対応の有無は `setup` が確かめて `store` 設定の `put_once` (true / false) に持ち ([DR-0010](./DR-0010-cli-shape.md))、helper と `add` は `put_once` が true の時だけヘッダを付ける。非対応のストアでは上書きできるまま
-- 接続情報 (endpoint / bucket / region / prefix / access key / secret / `put_once`) は System Keychain の `store` 項目に置く ([DR-0011](./DR-0011-user-keychain-signed-records.md))
+- 接続情報 (endpoint / bucket / region / prefix / access key / secret / `put_once`) は、ユーザの login keychain の `config` 項目の `store` に置く。設定はユーザ単位で、同じ Mac でもユーザごとに別のストアを使える ([DR-0011](./DR-0011-user-keychain-signed-records.md))
 
 ## 不採用案と理由
 
@@ -25,7 +25,7 @@ Mac (helper) と承認ページ (iPhone / Mac のブラウザ) の間で、要�
 ## Consequences
 
 - 中継側に置くコードが無い。利用者が用意するのはバケットと access key だけ
-- ストアの access key / secret は秘密なので、System Keychain の ACL を Developer ID 署名の `pam-passkey` バイナリに絞る
+- ストアの access key / secret は秘密なので、`config` 項目の ACL を Developer ID 署名の `pam-passkey` バイナリに絞る
 - presigned URL と request の期限を揃える
 
 ## 関連

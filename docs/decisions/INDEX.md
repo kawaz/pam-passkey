@@ -23,7 +23,7 @@ Status は各 DR ファイルの `Status:` 行が正本。
 | [DR-0008](DR-0008-pluggable-send-command.md) | ⬜ 未実装 | 通知は `send_command` (URL を stdin で受けるコマンド) でプラガブル、既定は tty 表示。通知経路は信頼境界の内側 |
 | [DR-0009](DR-0009-foreground-control.md) | ⬜ 未実装 | 前面制御は承認ページを開いた時のブラウザ activate のみ、承認後に起動元 terminal へ戻さない |
 | [DR-0010](DR-0010-cli-shape.md) | ⬜ 未実装 | CLI は 1 バイナリ、サブコマンドは `setup` / `add` / `list` / `del` + 内部用。`setup` がバケットの CORS と lifecycle を設定し、置き場を検査する |
-| [DR-0011](DR-0011-user-keychain-signed-records.md) | ⬜ 未実装 | passkey は login keychain に署名付きで置き、sudo 依存は `setup` だけ。設定と署名鍵は System Keychain、Keychain の読み書きは `pam-passkey` バイナリに限定 |
+| [DR-0011](DR-0011-user-keychain-signed-records.md) | ⬜ 未実装 | passkey (署名付き) と設定はユーザの login keychain、署名鍵は System Keychain。sudo 依存は署名鍵を作る初回の `setup` だけ。Keychain の読み書きは `pam-passkey` バイナリに限定 |
 | [DR-0012](DR-0012-auth-state-transitions.md) | ⬜ 未実装 | 認証の状態遷移と不変条件 (使う passkey と生体は `PAM_USER` のもの、Touch ID と remote の独立、全ての待ちに期限、seteuid の順序) |
 
 後続の DR に置き換えられた DR は [archive/INDEX.md](archive/INDEX.md)。

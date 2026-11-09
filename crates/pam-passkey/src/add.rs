@@ -7,10 +7,10 @@ use crate::passkeys::{self, own_keychain};
 use crate::records::{
     EcPublicJwk, PasskeyRecord, parse_signing_jwk, parse_verification_jwk, sign_record,
 };
-use crate::settings::{DEFAULT_PAGE_URL, Page, read_optional};
+use crate::settings::{Config, Page};
 use crate::store::{Fetched, MAX_CREDENTIAL, Store, StoreConfig};
 use crate::webauthn::{Registered, RegistrationExpectation, Rejection, verify_registration};
-use pam_passkey::keychain::{Keychain, SystemItem};
+use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
 use protocol::ExchangeRequest;
 use protocol::encoding::{base64url, format_utc};
 use std::error::Error;
@@ -253,7 +253,7 @@ fn confirm_owner(user: &str, home: &Path) -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// The System Keychain settings `add` needs before the identity check. The signing key is
+/// The settings `add` needs before the identity check, from the login keychain. The signing key is
 /// only checked for presence here; its value is read once the credential has been accepted.
 struct Settings {
     page: Page,
@@ -261,27 +261,25 @@ struct Settings {
     send_command: Option<String>,
 }
 
-fn load_settings(system: &Keychain) -> Result<Settings, Box<dyn Error>> {
-    let store = read_optional(system, SystemItem::Store)?
-        .ok_or("no store setting in the System Keychain (run pam-passkey setup)")?;
-    let store: StoreConfig = serde_json::from_str(&store)
-        .map_err(|error| format!("the store setting is not valid: {error}"))?;
-    let page = Page::parse(
-        read_optional(system, SystemItem::PageUrl)?
-            .as_deref()
-            .unwrap_or(DEFAULT_PAGE_URL),
-    )?;
-    let send_command =
-        read_optional(system, SystemItem::SendCommand)?.filter(|command| !command.is_empty());
+fn load_settings(system: &Keychain, login: &Keychain) -> Result<Settings, Box<dyn Error>> {
+    let config = match login.read_config() {
+        Ok(text) => text,
+        Err(KeychainError::NotFound) => {
+            return Err("no settings in your login keychain (run pam-passkey setup)".into());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let config: Config = serde_json::from_str(&config)
+        .map_err(|error| format!("your settings are not valid (run pam-passkey setup): {error}"))?;
     if !(system.exists_system(SystemItem::SigningKey)?
         && system.exists_system(SystemItem::VerificationKey)?)
     {
         return Err("no signing key in the System Keychain (run pam-passkey setup)".into());
     }
     Ok(Settings {
-        page,
-        store,
-        send_command,
+        page: Page::parse(&config.page_url)?,
+        store: config.store,
+        send_command: Some(config.send_command).filter(|command| !command.is_empty()),
     })
 }
 
@@ -346,7 +344,7 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
     };
     let (user, login) = own_keychain()?;
     let system = Keychain::system()?;
-    let settings = load_settings(&system)?;
+    let settings = load_settings(&system, &login)?;
     // The record is written to the login keychain at the end; fail before a passkey is
     // created if it cannot be (locked, denied).
     passkeys::read(&login, &user)?;
@@ -428,6 +426,7 @@ pub fn run(label: Option<&str>) -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::records::{trusted_credentials, unverified_record};
+    use crate::settings::DEFAULT_PAGE_URL;
     use crate::test_support::minio::Minio;
     use crate::test_support::{Authenticator, RegistrationDraft, record_signer};
     use protocol::encoding::{base64url_decode, parse_utc};

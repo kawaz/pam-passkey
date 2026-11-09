@@ -66,7 +66,7 @@ pam-passkey setup                              # 設定を $EDITOR で開く
 
 `.so` を既定の `/usr/local/lib/pam/pam_passkey.so` と違う場所に置いた時だけ `--module <path>` でその場所を渡す (置き場の所有権を検査する)。
 
-`setup` は設定を 1 つの JSON 文書として扱う。引数なしで実行すると今の設定 (初回は雛形) が `$EDITOR` (未設定なら vi) で開くので、書き換えて保存して閉じる。内容が変わっていれば検証して書き込み、変わっていなければ何もしない。書き込みの瞬間だけ `sudo` で自分を再実行する。
+`setup` は実行したユーザ自身の設定を 1 つの JSON 文書として扱い、そのユーザの login keychain に置く (`sudo` を付けずに実行する)。設定はユーザごとなので、passkey を使うユーザはそれぞれ `setup` を実行する。引数なしで実行すると今の設定 (初回は雛形) が `$EDITOR` (未設定なら vi) で開くので、書き換えて保存して閉じる。内容が変わっていれば検証して書き込み、変わっていなければ何もしない。その Mac で最初の `setup` だけは、System Keychain に署名鍵を作るために `sudo` のパスワードを聞かれる。
 
 ```json
 {
@@ -98,6 +98,8 @@ pam-passkey setup --stdin < settings.json     # 文書を渡して設定する (
 ```
 
 `setup` はストアへの疎通、条件付き PUT の対応、CORS と lifecycle の設定、配置先の所有権を確かめてから書き込む。
+
+以前の版の `setup` が System Keychain に書いた `page_url` / `store` / `send_command` の項目は、最初の `setup` で雛形の値に使い、その後は使わない。不要になったら `sudo security delete-generic-password -s pam-passkey -a <page_url|store|send_command> /Library/Keychains/System.keychain` で 1 つずつ消せる (署名鍵の `signing_key` / `verification_key` は消さない)。
 
 ## 3. passkey を登録する
 

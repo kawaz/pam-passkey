@@ -128,22 +128,20 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 
 ## 状態と設定: Keychain だけに置く
 
-設定・状態のファイルを持たない。設定と署名鍵は System Keychain (`/Library/Keychains/System.keychain`)、passkey はユーザの login keychain の generic password 項目に置く。
+設定・状態のファイルを持たない。署名鍵は System Keychain (`/Library/Keychains/System.keychain`)、設定 (`config`) と passkey はユーザの login keychain の generic password 項目に置く。
 
 - Keychain の項目の読み書きは `pam-passkey` バイナリ (Developer ID 署名) に限定し、全項目の ACL をこのバイナリに絞る。PAM モジュールは Keychain を読まない。ad-hoc 署名は build ごとに変わって ACL が外れるので、Developer ID 署名が前提
-- root が要るのは System Keychain に書く `setup` の書き込みだけ (`setup` が書き込みの瞬間だけ自分を sudo で再実行する)。`add` / `del` / `list` はユーザ権限で動く
+- root が要るのは System Keychain に署名鍵を作る時だけ (初回の `setup` と `regenerate_key` の時。`setup` がその瞬間だけ自分を sudo で再実行する)。System Keychain の既存項目の変更には管理者認証のダイアログが出るので、署名鍵は作った後は触らない。`setup` / `add` / `del` / `list` はユーザ権限で動き、自分の login keychain を読み書きする
 - `setup` は署名鍵 (JWK、秘密鍵) を生成し、署名鍵と検証用の公開鍵を System Keychain に置く。再実行で署名鍵を作り直すと、既存の登録は全て無効になる (再 `add`)。署名鍵は設定の JSON の `regenerate_key` が true の時だけ作り直し (既定は既存の鍵を残して設定だけを更新)、`--edit` では作り直す前に y/N で確認する ([DR-0010](./decisions/DR-0010-cli-shape.md))
-- 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
+- 認証時の login keychain の読み出しは、helper が `PAM_USER` に降格した子で行い、`config` と `users/<PAM_USER>` の項目を読む (unlock 済みの login keychain をユーザとして読む)。公開鍵で JWS を検証し、通らないもの、ペイロードの OS ユーザ名が認証対象のユーザと一致しないものは無効として無視する
 - ユーザ権限のプロセスが勝手に鍵を登録して自分の認証を承認する経路の塞ぎ方は [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md)
-- `store` と `send_command` はシステムに 1 つなので、同じ Mac の別ユーザの認証の URL も同じ `send_command` に渡る
+- 設定 (`page_url` / `store` / `send_command`) はユーザ単位。認証では `PAM_USER` の設定を使うので、同じ Mac でもユーザごとに別のストアと `send_command` になる。passkey を登録するユーザはそれぞれ `setup` を実行する
 
 | 置き場 | 項目 | 中身 |
 |---|---|---|
-| System Keychain | `page_url` | 承認 / 登録ページの URL (既定は `https://pam-passkey.github.io/`)。`rp_id` はここから導出する (既定は `pam-passkey.github.io`) |
-| System Keychain | `store` | S3 互換の接続情報 JSON (endpoint / bucket / region / prefix / access key / secret) と、presigned PUT を `If-None-Match: *` で 1 回限りにできるか (`put_once`。`setup` が判定する)。秘密を含む |
-| System Keychain | `send_command` | 承認 URL と登録 URL を stdin で受けるコマンド。空なら tty 表示 |
 | System Keychain | 署名鍵 | passkey の項目に署名する鍵 (Ed25519 の JWK、秘密鍵)。秘密 |
 | System Keychain | 署名鍵の公開鍵 | 認証時に passkey の項目の JWS を検証する鍵 (Ed25519 の JWK) |
+| login keychain | `config` | そのユーザの設定 JSON。`page_url` (承認 / 登録ページの URL。既定は `https://pam-passkey.github.io/`。`rp_id` はここから導出する)、`store` (S3 互換の接続情報 endpoint / bucket / region / prefix / access key / secret と、presigned PUT を `If-None-Match: *` で 1 回限りにできるか `put_once`。`setup` が判定する。秘密を含む)、`send_command` (承認 URL と登録 URL を stdin で受けるコマンド。空なら tty 表示)。署名は付けない |
 | login keychain | `users/<os user>` | そのユーザの passkey の JSONL。各行は JWS で、ペイロードは OS ユーザ名、credential id、user handle、公開鍵、ラベル、登録日、登録時の BE / BS フラグ。1 ユーザ 1 項目 |
 
 それ以外 (ポーリング間隔、ボタン文言) はコードの既定値。
@@ -152,7 +150,7 @@ Mac (helper):  request を PUT (バイト列を保持) → 承認 URL を send �
 
 | サブコマンド | 用途 |
 |---|---|
-| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | 初期設定と変更 (書き込み時に sudo)。設定は 1 つの JSON 文書で、`--dump` で今の設定を出し (secret は `***`)、`--stdin` で受け、`--edit` (既定) で `$EDITOR` で編集する。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。`store` と `send_command` を受け取り、ストアへの到達を確かめ、バケットの CORS と lifecycle を設定し、置き場の所有権を検査する |
+| `setup [--edit\|--stdin\|--dump] [--module <path>] [page_url]` | 自ユーザの設定 (login keychain の `config`) の初期設定と変更。初回だけ System Keychain に署名鍵を作るため sudo を使う。設定は 1 つの JSON 文書で、`--dump` で今の設定を出し (secret は `***`)、`--stdin` で受け、`--edit` (既定) で `$EDITOR` で編集する。`page_url` を省略すると既定の `https://pam-passkey.github.io/`。`store` と `send_command` を受け取り、ストアへの到達を確かめ、バケットの CORS と lifecycle を設定し、置き場の所有権を検査する |
 | `add [label]` | passkey を登録する (本人確認を求める)。label の既定は登録日時 |
 | `list` | 自ユーザの passkey を一覧する (label、credential id、登録日) |
 | `del <label\|id>` | passkey を削除する |
@@ -189,7 +187,7 @@ env は秘密が混ざるので出さない。プロセス情報は、呼び出�
 - [DR-0008](./decisions/DR-0008-pluggable-send-command.md) — 通知は `send_command` でプラガブル。通知経路は信頼境界の内側
 - [DR-0009](./decisions/DR-0009-foreground-control.md) — 前面制御は承認ページを開いた時のブラウザ activate のみ
 - [DR-0010](./decisions/DR-0010-cli-shape.md) — CLI は 1 バイナリ、動詞だけのサブコマンド
-- [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md) — passkey は login keychain に署名付きで置き、sudo 依存は `setup` だけ
+- [DR-0011](./decisions/DR-0011-user-keychain-signed-records.md) — passkey (署名付き) と設定は login keychain に置き、sudo 依存は署名鍵を作る初回の `setup` だけ
 - [DR-0012](./decisions/DR-0012-auth-state-transitions.md) — 認証の状態遷移と不変条件
 
 ## 関連ドキュメント

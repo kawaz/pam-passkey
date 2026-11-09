@@ -1,9 +1,22 @@
-//! The settings `setup` writes to the System Keychain and the helper reads (DESIGN 状態と設定).
+//! The settings `setup` writes to the user's login keychain (`config`) and the helper reads as
+//! PAM_USER (DESIGN 状態と設定).
 
+use crate::store::StoreConfig;
 use pam_passkey::keychain::{Keychain, KeychainError, SystemItem};
+use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
 pub const DEFAULT_PAGE_URL: &str = "https://pam-passkey.github.io/";
+
+/// The login keychain item `config`: one user's settings, as setup checked them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub page_url: String,
+    pub store: StoreConfig,
+    /// Empty: show the URLs on the terminal.
+    pub send_command: String,
+}
 
 /// `page_url` and what is derived from it: the origin the assertion must come from and the
 /// RP ID the passkey belongs to.

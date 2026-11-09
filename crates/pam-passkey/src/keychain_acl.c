@@ -11,12 +11,12 @@ int32_t passkey_keychain_is_locked(SecKeychainRef keychain) {
 
 // Design rationale: security-framework cannot set kSecAttrAccess, so a C shim is
 // necessary for the legacy macOS Keychain ACL; all searches are scoped to one keychain.
-// An existing item is updated in place, or with `replace` deleted and added again: updating an
-// existing System Keychain item asks for an administrator's authorization even as root, while
-// adding one does not.
+// A new item gets the ACL; an existing one keeps its ACL and only its data is updated. Setting
+// kSecAttrAccess on an existing item asks for the keychain's (System: an administrator's)
+// authorization in a dialog, even as root and with user interaction disabled.
 int32_t passkey_write_restricted(SecKeychainRef keychain, const char *self_path,
                                   const char *service, const char *account,
-                                  const uint8_t *value, size_t value_len, int replace) {
+                                  const uint8_t *value, size_t value_len) {
     int32_t status = errSecParam;
     CFStringRef service_ref = NULL, account_ref = NULL, descriptor = NULL;
     CFDataRef value_ref = NULL;
@@ -62,7 +62,6 @@ int32_t passkey_write_restricted(SecKeychainRef keychain, const char *self_path,
     if (!search_list) { status = errSecAllocate; goto done; }
     CFDictionarySetValue(query, kSecMatchSearchList, search_list);
     CFDictionarySetValue(attributes, kSecValueData, value_ref);
-    CFDictionarySetValue(attributes, kSecAttrAccess, access);
     add = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, query);
     if (!add) { status = errSecAllocate; goto done; }
     CFDictionaryRemoveValue(add, kSecMatchSearchList);
@@ -70,12 +69,7 @@ int32_t passkey_write_restricted(SecKeychainRef keychain, const char *self_path,
     CFDictionarySetValue(add, kSecValueData, value_ref);
     CFDictionarySetValue(add, kSecAttrAccess, access);
     status = SecItemAdd(add, NULL);
-    if (status == errSecDuplicateItem && replace) {
-        status = SecItemDelete(query);
-        if (status == errSecSuccess) status = SecItemAdd(add, NULL);
-    } else if (status == errSecDuplicateItem) {
-        status = SecItemUpdate(query, attributes);
-    }
+    if (status == errSecDuplicateItem) status = SecItemUpdate(query, attributes);
 done:
     if (add) CFRelease(add);
     if (attributes) CFRelease(attributes);

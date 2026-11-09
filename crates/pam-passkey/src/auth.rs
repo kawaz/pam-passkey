@@ -6,8 +6,8 @@
 
 use crate::child::{RunAs, current_user};
 use crate::records::{parse_verification_jwk, trusted_credentials};
-use crate::settings::{DEFAULT_PAGE_URL, Page, read_optional};
-use crate::store::{Fetched, MAX_ASSERTION, MAX_REQUEST, Store, StoreConfig};
+use crate::settings::{Config, Page, read_optional};
+use crate::store::{Fetched, MAX_ASSERTION, MAX_REQUEST, Store};
 use crate::webauthn::{CredentialSet, Expectation, Rejection, verify_assertion};
 use pam_passkey::keychain::{Keychain, SystemItem};
 use protocol::encoding::parse_utc;
@@ -18,9 +18,18 @@ use std::process::{Child, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Exit statuses of `_read-user-keys` other than success, so the helper can tell why it read nothing.
-pub const EXIT_NOT_FOUND: i32 = 2;
+/// The exit status of `_read-user` when the login keychain is locked or refuses the read.
 pub const EXIT_LOCKED: i32 = 3;
+
+/// What `_read-user` prints (one JSON line): PAM_USER's login keychain items, `null` when absent.
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserItems {
+    /// `config`: the settings setup wrote for this user.
+    pub config: Option<String>,
+    /// `users/<user>`: the signed passkey records.
+    pub records: Option<String>,
+}
 
 /// What `_probe-open` opens: the default page with a fragment that names no request.
 pub const DUMMY_APPROVAL_URL: &str = "https://pam-passkey.github.io/#pam-passkey-dummy-request";
@@ -36,9 +45,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// helper 5 seconds after the deadline.
 const CLEANUP_BUDGET: Duration = Duration::from_secs(4);
 
-enum Records {
-    Found(String),
-    Unavailable(UnavailableReason),
+enum UserRead {
+    Found(UserItems),
+    Locked,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -108,12 +117,13 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Reads `users/<PAM_USER>` from PAM_USER's login keychain in a child running as PAM_USER.
-fn read_records(user: &str, run_as: &RunAs) -> Result<Records, Box<dyn Error>> {
+/// Reads `config` and `users/<PAM_USER>` from PAM_USER's login keychain in a child running as
+/// PAM_USER.
+fn read_user(user: &str, run_as: &RunAs) -> Result<UserRead, Box<dyn Error>> {
     match run_as {
         // root has no passkeys and no biometry (DR-0012); its login keychain is never read.
         RunAs::Dropped(identity) if identity.uid == 0 => {
-            return Ok(Records::Unavailable(UnavailableReason::NoCredentials));
+            return Ok(UserRead::Found(UserItems::default()));
         }
         RunAs::Dropped(_) => {}
         RunAs::Inherited => {
@@ -125,16 +135,15 @@ fn read_records(user: &str, run_as: &RunAs) -> Result<Records, Box<dyn Error>> {
         }
     }
     let output = run_as
-        .command("_read-user-keys")?
+        .command("_read-user")?
         .arg(user)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()?;
     match output.status.code() {
-        Some(0) => Ok(Records::Found(String::from_utf8(output.stdout)?)),
-        Some(EXIT_NOT_FOUND) => Ok(Records::Unavailable(UnavailableReason::NoCredentials)),
-        Some(EXIT_LOCKED) => Ok(Records::Unavailable(UnavailableReason::KeychainLocked)),
+        Some(0) => Ok(UserRead::Found(serde_json::from_slice(&output.stdout)?)),
+        Some(EXIT_LOCKED) => Ok(UserRead::Locked),
         Some(status) => Err(format!(
             "cannot read the login keychain of user {user} (exit status {status})"
         )
@@ -429,51 +438,63 @@ impl Drop for Helper<'_> {
     }
 }
 
-/// The System Keychain settings a remote approval needs.
-struct Settings {
-    page: Page,
-    store: StoreConfig,
-    send_command: Option<String>,
-    verification_key: ed25519_dalek::VerifyingKey,
+/// The verification key from the System Keychain; `None` (logged) when setup has not made one,
+/// which leaves nothing that could be trusted. `Err` is a Keychain failure.
+fn verification_key() -> Result<Option<ed25519_dalek::VerifyingKey>, Box<dyn Error>> {
+    let keychain = Keychain::system()?;
+    let key = read_optional(&keychain, SystemItem::VerificationKey)?
+        .as_deref()
+        .and_then(parse_verification_jwk);
+    if key.is_none() {
+        eprintln!("pam-passkey: no usable verification key in the System Keychain (run setup)");
+    }
+    Ok(key)
 }
 
-/// The settings, or why their absence makes remote unavailable. `Err` is a Keychain failure.
-fn load_settings() -> Result<Result<Settings, UnavailableReason>, Box<dyn Error>> {
-    let keychain = Keychain::system()?;
-    // Without the verification key no record can be trusted: nothing is registered.
-    let Some(verification_key) = read_optional(&keychain, SystemItem::VerificationKey)?
-        .as_deref()
-        .and_then(parse_verification_jwk)
-    else {
-        eprintln!("pam-passkey: no usable verification key in the System Keychain (run setup)");
-        return Ok(Err(UnavailableReason::NoCredentials));
+/// What a request needs from PAM_USER's login keychain items and the verification key.
+pub struct UserSettings {
+    pub page: Page,
+    pub store: Store,
+    /// `None` delivers the approval URL as a `url` event.
+    pub send_command: Option<String>,
+    pub credentials: CredentialSet,
+}
+
+/// PAM_USER's settings (`config`) and trusted credentials (`users/<user>`), or why remote cannot
+/// run without them (logged).
+pub fn user_settings(
+    items: UserItems,
+    user: &str,
+    verification_key: Option<&ed25519_dalek::VerifyingKey>,
+) -> Result<UserSettings, UnavailableReason> {
+    let records = items.records.ok_or(UnavailableReason::NoCredentials)?;
+    let Some(config) = items.config else {
+        eprintln!("pam-passkey: no settings for user {user} (run pam-passkey setup as {user})");
+        return Err(UnavailableReason::StoreUnreachable);
     };
-    let store = match read_optional(&keychain, SystemItem::Store)? {
-        Some(text) => match serde_json::from_str::<StoreConfig>(&text) {
-            Ok(store) => store,
-            Err(error) => {
-                eprintln!("pam-passkey: the store setting is not valid: {error}");
-                return Ok(Err(UnavailableReason::StoreUnreachable));
-            }
-        },
-        None => {
-            eprintln!("pam-passkey: no store setting in the System Keychain (run setup)");
-            return Ok(Err(UnavailableReason::StoreUnreachable));
-        }
-    };
-    let page = Page::parse(
-        read_optional(&keychain, SystemItem::PageUrl)?
-            .as_deref()
-            .unwrap_or(DEFAULT_PAGE_URL),
-    )?;
-    let send_command =
-        read_optional(&keychain, SystemItem::SendCommand)?.filter(|command| !command.is_empty());
-    Ok(Ok(Settings {
+    let config: Config = serde_json::from_str(&config).map_err(|error| {
+        eprintln!("pam-passkey: the settings of user {user} are not valid: {error}");
+        UnavailableReason::StoreUnreachable
+    })?;
+    let verification_key = verification_key.ok_or(UnavailableReason::NoCredentials)?;
+    let credentials = trusted_credentials(&records, verification_key, user);
+    if credentials.is_empty() {
+        return Err(UnavailableReason::NoCredentials);
+    }
+    let page = Page::parse(&config.page_url).map_err(|error| {
+        eprintln!("pam-passkey: the page_url of user {user}: {error}");
+        UnavailableReason::StoreUnreachable
+    })?;
+    let store = Store::new(&config.store).map_err(|error| {
+        eprintln!("pam-passkey: the store of user {user}: {error}");
+        UnavailableReason::StoreUnreachable
+    })?;
+    Ok(UserSettings {
         page,
         store,
-        send_command,
-        verification_key,
-    }))
+        send_command: Some(config.send_command).filter(|command| !command.is_empty()),
+        credentials,
+    })
 }
 
 pub fn run() -> Result<(), Box<dyn Error>> {
@@ -491,29 +512,18 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     let unavailable = |reason| emit(&HelperEvent::Unavailable { reason });
     let run_as = RunAs::for_user(&input.user)?;
-    let records = match read_records(&input.user, &run_as)? {
-        Records::Found(records) => records,
-        Records::Unavailable(reason) => return Ok(unavailable(reason)?),
+    let items = match read_user(&input.user, &run_as)? {
+        UserRead::Found(items) => items,
+        UserRead::Locked => return Ok(unavailable(UnavailableReason::KeychainLocked)?),
     };
-    let Settings {
+    let UserSettings {
         page,
         store,
         send_command,
-        verification_key,
-    } = match load_settings()? {
+        credentials,
+    } = match user_settings(items, &input.user, verification_key()?.as_ref()) {
         Ok(settings) => settings,
         Err(reason) => return Ok(unavailable(reason)?),
-    };
-    let credentials = trusted_credentials(&records, &verification_key, &input.user);
-    if credentials.is_empty() {
-        return Ok(unavailable(UnavailableReason::NoCredentials)?);
-    }
-    let store = match Store::new(&store) {
-        Ok(store) => store,
-        Err(error) => {
-            eprintln!("pam-passkey: {error}");
-            return Ok(unavailable(UnavailableReason::StoreUnreachable)?);
-        }
     };
 
     let (sender, lines) = channel();
@@ -549,7 +559,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use crate::test_support::minio::Minio;
-    use crate::test_support::{Authenticator, Draft};
+    use crate::test_support::{Authenticator, Draft, record_signer, signed_record};
     use protocol::RequestDetails;
     use protocol::encoding::{base64url, format_utc};
     use std::sync::mpsc::Sender;
@@ -768,14 +778,24 @@ mod tests {
     /// One request against MinIO from PUT to DELETE, with a page that fetches the request
     /// through the approval URL and answers through the presigned URLs it contains.
     fn round(minio: &Minio, id: &str, send_command: Option<&str>, action: PageAction) -> Outcome {
-        let store = Store::new(&minio.config(true)).unwrap();
-        let page = Page::parse("https://pam-passkey.github.io/").unwrap();
         let authenticator = Authenticator::new(5, b"registered-credential");
-        let mut credentials = CredentialSet::default();
-        credentials.insert(
-            authenticator.credential_id.clone(),
-            authenticator.public_key(),
-        );
+        // The page, the store and send_command come from PAM_USER's `config`, the credential
+        // from its signed `users/<user>` record, as `_read-user` hands them over.
+        let signer = record_signer(1);
+        let items = UserItems {
+            config: Some(config_json(minio, send_command.unwrap_or(""))),
+            records: Some(signed_record(&signer, "kawaz", &authenticator)),
+        };
+        let Ok(UserSettings {
+            page,
+            store,
+            send_command: configured,
+            credentials,
+        }) = user_settings(items, "kawaz", Some(&signer.verifying_key()))
+        else {
+            panic!("the user's settings are usable");
+        };
+        assert_eq!(configured.as_deref(), send_command);
         let input = input(id, 30);
         let expires = parse_utc(&input.expires).unwrap();
         let (url_sender, urls) = channel::<String>();
@@ -834,7 +854,7 @@ mod tests {
             page: &page,
             store: &store,
             credentials: &credentials,
-            send_command,
+            send_command: configured.as_deref(),
             expires,
             deadline: Instant::now() + Duration::from_secs(30),
         };
@@ -864,6 +884,88 @@ mod tests {
             request_left: left("request"),
             assertion_left: left("assertion"),
         }
+    }
+
+    /// PAM_USER's `config` item for a MinIO store.
+    fn config_json(minio: &Minio, send_command: &str) -> String {
+        serde_json::to_string(&Config {
+            page_url: "https://pam-passkey.github.io/".into(),
+            store: minio.config(true),
+            send_command: send_command.into(),
+        })
+        .unwrap()
+    }
+
+    // Remote runs only with PAM_USER's own settings and records: no records is no credentials,
+    // no or broken settings make the store unreachable, and records signed for another user or
+    // by another key leave nothing to trust.
+    #[test]
+    fn user_settings_come_from_pam_users_items() {
+        let signer = record_signer(1);
+        let authenticator = Authenticator::new(5, b"registered-credential");
+        let record = signed_record(&signer, "kawaz", &authenticator);
+        let config = serde_json::to_string(&Config {
+            page_url: "https://pam-passkey.github.io/".into(),
+            store: crate::test_support::unreachable_store(),
+            send_command: String::new(),
+        })
+        .unwrap();
+        let key = signer.verifying_key();
+        let reason = |config: Option<&str>, records: Option<&str>, key| {
+            user_settings(
+                UserItems {
+                    config: config.map(str::to_owned),
+                    records: records.map(str::to_owned),
+                },
+                "kawaz",
+                key,
+            )
+            .err()
+        };
+        assert_eq!(reason(Some(&config), Some(&record), Some(&key)), None);
+        assert_eq!(
+            reason(Some(&config), None, Some(&key)),
+            Some(UnavailableReason::NoCredentials)
+        );
+        assert_eq!(
+            reason(None, Some(&record), Some(&key)),
+            Some(UnavailableReason::StoreUnreachable)
+        );
+        assert_eq!(
+            reason(Some("{}"), Some(&record), Some(&key)),
+            Some(UnavailableReason::StoreUnreachable)
+        );
+        assert_eq!(
+            reason(Some(&config), Some(&record), None),
+            Some(UnavailableReason::NoCredentials)
+        );
+        let other_user = signed_record(&signer, "someone", &authenticator);
+        assert_eq!(
+            reason(Some(&config), Some(&other_user), Some(&key)),
+            Some(UnavailableReason::NoCredentials)
+        );
+        let other_key = record_signer(2).verifying_key();
+        assert_eq!(
+            reason(Some(&config), Some(&record), Some(&other_key)),
+            Some(UnavailableReason::NoCredentials)
+        );
+        let insecure = config.replace("https://pam-passkey", "http://pam-passkey");
+        assert_eq!(
+            reason(Some(&insecure), Some(&record), Some(&key)),
+            Some(UnavailableReason::StoreUnreachable)
+        );
+    }
+
+    // `_read-user` hands both items over in one line; an absent item is null, not missing.
+    #[test]
+    fn user_items_line_shape() {
+        let line = serde_json::to_string(&UserItems {
+            config: None,
+            records: Some("r".into()),
+        })
+        .unwrap();
+        assert_eq!(line, r#"{"config":null,"records":"r"}"#);
+        assert!(serde_json::from_str::<UserItems>(r#"{"records":"r","extra":1}"#).is_err());
     }
 
     fn id(index: usize) -> String {

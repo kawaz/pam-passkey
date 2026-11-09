@@ -24,8 +24,8 @@ const HELP: &str = "pam-passkey — passkey approval for PAM (sudo) from a phone
 Commands:
   setup [--edit|--stdin|--dump] [--module <path>] [page_url]
                                      Configure the approval page, the store and send_command as a
-                                     JSON document (writes the System Keychain through sudo; see
-                                     setup --help)
+                                     JSON document in your login keychain (the first run creates
+                                     the signing key through sudo; see setup --help)
   add [label]                        Register a passkey for yourself (asks for Touch ID or your
                                      password, then shows or sends a registration URL; the label
                                      defaults to the registration time)
@@ -33,9 +33,10 @@ Commands:
   del <label|id>                     Delete one of your passkeys by credential id or by label
 
 Commands (internal, started by pam_passkey.so, the helper itself or setup):
-  _setup-write                       Write the settings checked by setup (as root)
+  _setup-write                       Create the System Keychain signing key (as root)
   _auth                              Serve one authentication request (helper-protocol on stdin/stdout)
-  _read-user-keys <user>             Print the user's signed public-key records (exit 2: none, 3: locked)
+  _read-user <user>                  Print the user's settings and signed passkey records from the
+                                     login keychain as one JSON line (exit 3: locked)
   _open-page                         Open the URL read from stdin in the default browser
   _activate-browser                  Bring the default browser for the URL read from stdin to the front
 
@@ -107,20 +108,37 @@ fn probe_dialog(reason: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// `_read-user-keys`: runs as the user whose login keychain it reads.
-fn read_user_keys(user: &str) -> i32 {
+/// `_read-user`: runs as the user whose login keychain it reads, and prints its `config` and
+/// `users/<user>` items for the helper (one JSON line; an absent item is null).
+fn read_user(user: &str) -> i32 {
     let result = current_user().and_then(|(current, home)| {
         if user != current {
             return Err("read requested for another OS user".into());
         }
-        Ok(Keychain::login(Path::new(&home))?.read_user(user))
+        let keychain = Keychain::login(Path::new(&home))?;
+        let optional = |read: Result<String, KeychainError>| match read {
+            Ok(text) => Ok(Some(text)),
+            Err(KeychainError::NotFound) => Ok(None),
+            Err(error) => Err(error),
+        };
+        Ok(optional(keychain.read_user(user)).and_then(|records| {
+            Ok(auth::UserItems {
+                config: optional(keychain.read_config())?,
+                records,
+            })
+        }))
     });
     match result {
-        Ok(Ok(keys)) => {
-            print!("{keys}");
-            0
-        }
-        Ok(Err(KeychainError::NotFound)) => auth::EXIT_NOT_FOUND,
+        Ok(Ok(items)) => match serde_json::to_string(&items) {
+            Ok(line) => {
+                println!("{line}");
+                0
+            }
+            Err(error) => {
+                eprintln!("pam-passkey: {error}");
+                1
+            }
+        },
         Ok(Err(error @ (KeychainError::Locked(_) | KeychainError::AccessDenied(_)))) => {
             eprintln!("pam-passkey: {error}");
             auth::EXIT_LOCKED
@@ -243,9 +261,9 @@ fn run(args: &[String]) -> Result<(), Box<dyn Error>> {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let [command, user] = args.as_slice()
-        && command == "_read-user-keys"
+        && command == "_read-user"
     {
-        std::process::exit(read_user_keys(user));
+        std::process::exit(read_user(user));
     }
     if let Err(error) = run(&args) {
         eprintln!("pam-passkey: {error}");

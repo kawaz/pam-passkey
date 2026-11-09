@@ -15,6 +15,8 @@ const ERR_SEC_ITEM_NOT_FOUND: i32 = errSecItemNotFound;
 
 const SERVICE: &str = "pam-passkey";
 const PROBE_SERVICE: &str = "pam-passkey-probe";
+/// The login keychain account of the user's settings; `users/...` names cannot collide with it.
+const CONFIG_ACCOUNT: &str = "config";
 const SYSTEM_PATH: &str = "/Library/Keychains/System.keychain";
 
 unsafe extern "C" {
@@ -25,7 +27,6 @@ unsafe extern "C" {
         account: *const std::ffi::c_char,
         value: *const u8,
         value_len: usize,
-        replace: std::ffi::c_int,
     ) -> i32;
     fn passkey_keychain_is_locked(keychain: SecKeychainRef) -> i32;
 }
@@ -129,8 +130,6 @@ impl Keychain {
     /// access, but its lock state as seen from a process can read "locked" (it has
     /// lock-on-sleep and an idle timeout). Its failures are therefore classified by their
     /// status alone, so an absent item is "not found" (first setup) rather than "locked".
-    /// Its existing items are replaced (deleted and added) rather than updated: updating asks
-    /// for an administrator's authorization even as root, adding does not.
     pub fn system() -> Result<Self, KeychainError> {
         Ok(Self {
             handle: SecKeychain::open(SYSTEM_PATH).map_err(KeychainError::Open)?,
@@ -200,7 +199,6 @@ impl Keychain {
                 account.as_ptr(),
                 value.as_ptr(),
                 value.len(),
-                std::ffi::c_int::from(self.kind == Kind::System),
             )
         };
         if status == errSecSuccess {
@@ -271,6 +269,15 @@ impl Keychain {
 
     pub fn delete_user(&self, user: &str) -> Result<(), KeychainError> {
         self.delete(SERVICE, &Self::user_account(user)?)
+    }
+
+    /// The user's settings (account `config`), in the login keychain.
+    pub fn read_config(&self) -> Result<String, KeychainError> {
+        self.read(SERVICE, CONFIG_ACCOUNT)
+    }
+
+    pub fn write_config(&self, json: &str) -> Result<(), KeychainError> {
+        self.write(SERVICE, CONFIG_ACCOUNT, json)
     }
 
     pub fn read_probe_user(&self, user: &str) -> Result<String, KeychainError> {

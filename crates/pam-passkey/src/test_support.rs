@@ -225,6 +225,44 @@ pub fn unreachable_store() -> crate::store::StoreConfig {
     }
 }
 
+/// A login keychain of its own under a fresh home directory (`<home>/Library/Keychains/
+/// login.keychain-db`), unlocked, removed on drop with SecKeychainDelete, which also takes it
+/// off the user's keychain search list (using it puts it there).
+pub struct TemporaryLogin {
+    pub home: std::path::PathBuf,
+    created: security_framework::os::macos::keychain::SecKeychain,
+}
+
+unsafe extern "C" {
+    fn SecKeychainDelete(keychain: security_framework_sys::base::SecKeychainRef) -> i32;
+}
+
+impl TemporaryLogin {
+    pub fn create() -> Self {
+        let home = minio::temporary_directory();
+        let keychains = home.join("Library/Keychains");
+        std::fs::create_dir_all(&keychains).unwrap();
+        let created = security_framework::os::macos::keychain::CreateOptions::new()
+            .password("pam-passkey-test")
+            .create(keychains.join("login.keychain-db"))
+            .unwrap();
+        Self { home, created }
+    }
+
+    pub fn keychain(&self) -> pam_passkey::keychain::Keychain {
+        pam_passkey::keychain::Keychain::login(&self.home).unwrap()
+    }
+}
+
+impl Drop for TemporaryLogin {
+    fn drop(&mut self) {
+        use core_foundation::base::TCFType;
+        // SAFETY: the keychain reference is alive for the call.
+        unsafe { SecKeychainDelete(self.created.as_concrete_TypeRef()) };
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
+}
+
 pub mod minio {
     //! A MinIO server for one test, in its own temporary directory, stopped on drop.
 
@@ -247,7 +285,7 @@ pub mod minio {
     }
 
     /// A fresh directory under the system temporary directory (mkdtemp).
-    fn temporary_directory() -> PathBuf {
+    pub fn temporary_directory() -> PathBuf {
         let template = std::env::temp_dir().join("pam-passkey-minio.XXXXXX");
         let template = CString::new(template.as_os_str().as_bytes()).unwrap();
         let raw = template.into_raw();
