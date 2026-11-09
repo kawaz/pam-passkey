@@ -134,5 +134,5 @@ auth       sufficient     /usr/local/lib/pam/pam_passkey.so
 
 - ダイアログが出ない / すぐパスワードになる: `/usr/local/libexec/pam-passkey` と `.so` が root 所有で Developer ID 署名か、`setup` を済ませているかを確認する
 - ssh 経由の sudo では Touch ID もリモート承認も使えない (login keychain が unlock されていないため)。パスワードになる
-- 何が起きたか見たい: モジュールと helper は unified logging に要求 ID ごとの経過 (Touch ID の結果コード、helper の起動、unavailable の理由、ストアへの PUT / DELETE、PAM の戻り値。秘密と URL は出さない) を残す。`log show --predicate 'subsystem == "jp.kawaz.pam-passkey"' --last 5m` で見る
+- 何が起きたか見たい: モジュールと helper は unified logging に要求 ID ごとの経過 (Touch ID の結果コード、helper の起動、unavailable の理由、ストアへの PUT / DELETE、PAM の戻り値。秘密と URL は出さない) を残す。`/usr/bin/log show --predicate 'subsystem == "jp.kawaz.pam-passkey"' --last 5m` で見る
 - 登録を全部やり直したい: `pam-passkey setup --edit` で `"regenerate_key": true` を足して署名鍵を作り直す (全ユーザの登録が無効になる)

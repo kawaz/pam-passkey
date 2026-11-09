@@ -134,5 +134,5 @@ If neither goes through (cancel, rejection, expiry at 90 seconds), it falls back
 
 - The dialog does not appear / it goes to the password right away: check that `/usr/local/libexec/pam-passkey` and the `.so` are root-owned and Developer ID signed, and that you have finished `setup`
 - With sudo over ssh, neither Touch ID nor remote approval is available (the login keychain is not unlocked). It goes to the password
-- To see what happened: the module and the helper leave the progress for each request ID in unified logging (the Touch ID result code, the start of the helper, the reason for unavailable, the PUT / DELETE to the store, the PAM return value. Secrets and URLs are not logged). View it with `log show --predicate 'subsystem == "jp.kawaz.pam-passkey"' --last 5m`
+- To see what happened: the module and the helper leave the progress for each request ID in unified logging (the Touch ID result code, the start of the helper, the reason for unavailable, the PUT / DELETE to the store, the PAM return value. Secrets and URLs are not logged). View it with `/usr/bin/log show --predicate 'subsystem == "jp.kawaz.pam-passkey"' --last 5m`
 - To start the enrollments over: add `"regenerate_key": true` with `pam-passkey setup --edit` to regenerate the signing key (the enrollments of all users become invalid)
