@@ -6,5 +6,4 @@ active な issue の一覧。close 済みは archive/ にあり、ここには�
 |---|---|---|---|---|
 | 2026-11-09 | task | open | [touch-id-lockout-notice](./2026-11-09-touch-id-lockout-notice.md) | Touch ID が失敗回数超過でロックされている時 (`canEvaluatePolicy` が -8)、利用者には「Touch ID が出ずパスワードに落ち… |
 | 2026-11-09 | task | open | [encrypt-request-envelope](./2026-11-09-encrypt-request-envelope.md) | argv に紛れる秘密や将来 env の許可リストを載せた場合に、ストア側 (運営者、漏れた access key、バックアップ、バージ… |
-| 2026-11-09 | task | open | [impl-3b-page-and-add](./2026-11-09-impl-3b-page-and-add.md) | 承認ページと登録ページ (1 ファイル) を GitHub Pages のリポ pam-passkey/pam-passkey.github.io に実装し、add / list / del を実装して… |
 | 2026-11-09 | task | open | [touch-id-dialog-context](./2026-11-09-touch-id-dialog-context.md) | 承認ページを開かなくても、Touch ID ダイアログだけで「どこから来た認証要求か」を判断できるようにする。kawaz の案 (2026-1… |

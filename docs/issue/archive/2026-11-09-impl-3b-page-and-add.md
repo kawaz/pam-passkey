@@ -1,6 +1,6 @@
 ---
 title: 実装 ③b 承認 / 登録ページ (pam-passkey.github.io) と add / list / del、実機の一周
-status: open
+status: resolved
 category: task
 created: 2026-11-09T03:23:04+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T12:50:55+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["implemented","finding/2026-11-09-end-to-end"]
 blocked_by:
 origin: 自リポ TODO
 ---
