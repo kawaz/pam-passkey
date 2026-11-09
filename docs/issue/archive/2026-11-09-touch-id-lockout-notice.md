@@ -1,6 +1,6 @@
 ---
 title: Touch ID ロックアウト (LAError -8) 時に理由と解除方法を tty と画面に出す
-status: open
+status: resolved
 category: task
 created: 2026-11-09T12:40:32+09:00
 last_read:
@@ -9,10 +9,10 @@ wip_entered:
 blocked_entered:
 pending_entered:
 discarded_entered:
-resolved_entered:
+resolved_entered: 2026-11-09T13:06:09+09:00
 discard_reason:
 pending_reason:
-close_reason:
+close_reason: ["done","dr/DR-0012"]
 blocked_by:
 origin: 自リポ TODO
 ---
